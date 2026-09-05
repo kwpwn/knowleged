@@ -2148,6 +2148,9 @@ AWS (Amazon Web Services):
 
 ⚠ EC2 Metadata Endpoint - SSRF goldmine:
   URL: http://169.254.169.254/latest/meta-data/
+  (169.254.169.254 là địa chỉ "link-local" — chỉ truy cập được TỪ CHÍNH máy đó,
+   không thể truy cập từ internet. Cloud providers đặt metadata service tại đây
+   vì cho rằng chỉ instance mới gọi được — nhưng SSRF cho phép server gọi thay attacker!)
   → Trả về: instance ID, security groups, IAM role credentials
 
   http://169.254.169.254/latest/meta-data/iam/security-credentials/<role-name>
@@ -7465,7 +7468,7 @@ JWT gồm 3 phần phân tách bởi dấu chấm: `header.payload.signature`
 eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.POstGetfAytaZS82wHcjoTyoqhMyxXiWdR7Nn7A29DNSl0EiXLdwJ6xC6AfgZWF1bOsS_TuYI3OG85AmiExREkrS6tDfTQ2B3WXlrr-wp5AokiRbz3_oB4OxG-W9KcEEbDRcZc0nH3L7LzYptiy1PtAylQGxHTWZXtGz4ht0bAecBgmpdgXMguEIcoqPJ1n3pIWk_dUZegpqx0Lka21H6XxUTxiy8OcaarA8zdnPUnV6AmNP3ecFawIFYdvJB_cm-GvpCSbr8G8y_Mllj8f4x9nBH8pQux89_6gUY618iYv7tuPWBFfEbLxtF2pZS6YC1aSfLQxaOoaBSTrz0fQ
 ```
 
-**Header (JOSE Header):**
+**Header (JOSE — JSON Object Signing and Encryption — bộ tiêu chuẩn bảo mật cho JSON tokens):**
 ```json
 {
   "alg": "RS256",    // Algorithm dùng để sign
@@ -7813,7 +7816,11 @@ def verify_jwt(token):
 #### Attack 2: Algorithm Confusion (RS256 → HS256)
 
 Đây là attack tinh vi nhất và quan trọng nhất. Hiểu attack này đòi hỏi nắm vững
-sự khác biệt giữa symmetric và asymmetric crypto.
+sự khác biệt giữa symmetric và asymmetric crypto:
+
+> **Phân biệt nhanh:**
+> - **Symmetric (HS256):** MỘT khóa dùng để cả ký và xác minh — giống mật khẩu WiFi, ai biết mật khẩu đều kết nối được.
+> - **Asymmetric (RS256):** HAI khóa — private key ký, public key xác minh — giống con dấu công ty: chỉ giám đốc mới đóng được nhưng ai cũng kiểm tra được.
 
 **Bối cảnh:**
 ```
@@ -8469,8 +8476,10 @@ Authorization code đặc điểm:
   - Ngắn hạn: hết hạn sau 1-10 phút
   - Single-use: chỉ dùng được 1 lần
   - Bound to client_id và redirect_uri
-  - Code đi qua browser (front-channel) → có thể bị intercept
-  → Đó là lý do cần step tiếp theo (back-channel exchange)
+  - Code đi qua browser (front-channel = giao tiếp qua trình duyệt của user —
+    user hoặc attacker có thể nhìn/intercept được) → có thể bị intercept
+  → Đó là lý do cần step tiếp theo (back-channel = giao tiếp trực tiếp
+    server-to-server — user KHÔNG nhìn thấy, KHÔNG intercept được)
 ```
 
 **Step 5: Client đổi code lấy token (Server-to-Server)**
@@ -9856,6 +9865,8 @@ XSS là lỗ hổng phổ biến nhất và nguy hiểm nhất trong nhóm clien
 
 **Định nghĩa:** Cross-Site Scripting (XSS) xảy ra khi attacker inject được JavaScript vào trang web mà người dùng khác đang xem. Trình duyệt của nạn nhân thực thi code đó trong ngữ cảnh (origin) của trang web bị lỗi — nghĩa là code có toàn quyền truy cập cookie, DOM, và session của nạn nhân trên trang đó.
 
+> **Origin là gì?** Origin = scheme + host + port (ví dụ: `https://example.com:443`). Theo quy tắc **SOP (Same-Origin Policy)**, JavaScript chạy trong origin nào thì có quyền truy cập cookie và DOM của origin đó. XSS "nhảy vào" origin của trang bị lỗi, nên nó có toàn quyền — đây là lý do XSS nguy hiểm.
+
 **Tương tự thực tế:** Hãy tưởng tượng một bảng thông báo công cộng trong văn phòng. Bạn dán thông báo "Họp lúc 3h" — hoàn toàn bình thường. Nhưng nếu ai đó dán được một tờ giấy giả mạo "Nhập mật khẩu email vào đây để xác thực" và mọi người tin đó là thông báo chính thức của công ty — đó chính là XSS. Kẻ tấn công "dán" code vào trang web hợp pháp, và trình duyệt nạn nhân tin đó là code của trang web.
 
 **Ba loại XSS:**
@@ -9881,7 +9892,11 @@ XSS là lỗ hổng phổ biến nhất và nguy hiểm nhất trong nhóm clien
 
 ### 14.2 [INTERNALS] HTML5 Parser State Machine
 
-Đây là phần quan trọng nhất để hiểu TẠI SAO XSS hoạt động. Trình duyệt không đọc HTML như con người — nó chạy một state machine phức tạp với khoảng 80 trạng thái. Hiểu state machine này = hiểu tại sao payload này hoạt động mà payload kia thì không.
+Đây là phần quan trọng nhất để hiểu TẠI SAO XSS hoạt động. Trình duyệt không đọc HTML như con người — nó chạy một **state machine** (máy trạng thái) phức tạp với khoảng 80 trạng thái.
+
+> **State machine là gì?** Là mô hình xử lý tuần tự: tại mỗi thời điểm, parser ở một "trạng thái" cụ thể. Tùy vào ký tự tiếp theo, parser chuyển sang trạng thái khác. Giống đèn giao thông: đèn xanh (cho đi) → timer hết → đèn vàng (chuẩn bị) → timer hết → đèn đỏ (dừng). HTML parser có ~80 trạng thái như vậy.
+
+Hiểu state machine này = hiểu tại sao payload này hoạt động mà payload kia thì không.
 
 #### 14.2.1 Các trạng thái quan trọng cho security
 
@@ -15177,9 +15192,9 @@ DTD định nghĩa cấu trúc và entities cho XML document.
 ```xml
 <!DOCTYPE note [
   <!ELEMENT note (to,from,body)>
-  <!ELEMENT to (#PCDATA)>
-  <!ELEMENT from (#PCDATA)>
-  <!ELEMENT body (#PCDATA)>
+  <!ELEMENT to (#PCDATA)>      <!-- PCDATA = Parsed Character Data = text thường, -->
+  <!ELEMENT from (#PCDATA)>    <!-- parser sẽ xử lý entity references như &amp; -->
+  <!ELEMENT body (#PCDATA)>    <!-- trong phần nội dung này -->
   <!ENTITY greeting "Hello World">
 ]>
 <note>
