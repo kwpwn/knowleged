@@ -14449,7 +14449,7 @@ ws.onopen = function() {
 for (var i = 0; i < 10000; i++) {
     new WebSocket('wss://target.com/ws');
 }
-// Exhaust server resources (file descriptors, memory)
+// Làm cạn tài nguyên server (file descriptors, memory)
 ```
 
 ---
