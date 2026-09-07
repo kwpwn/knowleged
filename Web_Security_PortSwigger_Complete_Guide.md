@@ -13561,6 +13561,98 @@ Defense evolution:
   Ongoing: Firefox/Safari adoption pending
 ```
 
+#### Subdomain Takeover — Bug Bounty Phổ Biến Nhất
+
+```
+Subdomain takeover xảy ra khi DNS record trỏ đến service KHÔNG CÒN TỒN TẠI.
+Attacker claim service đó → sở hữu subdomain → steal cookies, phishing, CORS exploit.
+
+Tại sao phổ biến? Doanh nghiệp tạo hàng trăm subdomains cho campaigns, dev, staging...
+rồi QUÊN xóa DNS record khi service bị tắt.
+
+Cách hoạt động:
+  1. company.com có CNAME: blog.company.com → company.ghost.io
+  2. Company ngưng dùng Ghost → xóa Ghost account
+  3. DNS vẫn trỏ blog.company.com → company.ghost.io
+  4. Attacker đăng ký company.ghost.io trên Ghost (tên khả dụng!)
+  5. blog.company.com giờ serve nội dung của attacker!
+
+Dấu hiệu nhận biết (fingerprints):
+  Cloud Provider     │ Error Message khi chưa claimed
+  ────────────────────┼──────────────────────────────────
+  GitHub Pages        │ "There isn't a GitHub Pages site here"
+  Heroku              │ "No such app"
+  AWS S3              │ "NoSuchBucket"
+  Azure               │ "404 Web Site not found"
+  Shopify             │ "Sorry, this shop is currently unavailable"
+  Fastly              │ "Fastly error: unknown domain"
+  Ghost               │ "The thing you were looking for is no longer here"
+  Tumblr              │ "Whatever you were looking for doesn't currently exist"
+
+Recon tools:
+  # Tìm subdomain có CNAME trỏ đến cloud service
+  subfinder -d target.com -o subs.txt
+  
+  # Check takeover vulnerability
+  subjack -w subs.txt -t 100 -timeout 30 -ssl
+  nuclei -l subs.txt -t http/takeovers/ -silent
+  
+  # Manual check
+  dig blog.target.com CNAME
+  # Nếu CNAME → service.cloudprovider.com và service trả lỗi → có thể takeover!
+
+Impact:
+  - Cookie theft: nếu cookie set cho .company.com → subdomain đọc được!
+  - Phishing: blog.company.com hiển thị fake login page (trusted domain)
+  - CORS bypass: nếu *.company.com trong CORS whitelist (xem ở trên)
+  - Email: có thể nhận email gửi đến @blog.company.com (SPF/DKIM bypass)
+
+Prevention:
+  - Xóa DNS record TRƯỚC khi tắt service (không phải sau)
+  - Monitor subdomain health tự động
+  - Dùng CNAME validation hoặc domain verification trên cloud providers
+  - Audit DNS records định kỳ: tìm CNAME trỏ đến NXDOMAIN
+```
+
+#### Email Header Injection (CRLF trong Email)
+
+```
+Khi web app gửi email (reset password, contact form, notifications),
+nếu user input được đưa vào email headers KHÔNG sanitize → attacker
+inject thêm headers (CC, BCC, Subject, body).
+
+Vulnerable code (Python):
+  @app.route('/contact', methods=['POST'])
+  def contact():
+      from_email = request.form['email']  # User-controlled!
+      subject = request.form['subject']
+      # Nối trực tiếp vào header → INJECTION!
+      send_email(
+          to="support@company.com",
+          from_=from_email,
+          subject=subject,
+          body=request.form['message']
+      )
+
+Attack — inject CC/BCC:
+  email = "attacker@evil.com\r\nCC: victim1@target.com\r\nBCC: victim2@target.com"
+  → Email gửi đến support@ VÀ CC/BCC đến victims!
+  
+  email = "attacker@evil.com\r\nSubject: URGENT: Reset your password\r\n\r\nFake body here"
+  → Ghi đè subject VÀ body → phishing email từ trusted domain!
+
+Impact:
+  - Spam relay: dùng server company gửi spam (bypass email filters)
+  - Phishing: email từ @company.com → victim tin tưởng
+  - Data exfil: BCC sensitive emails đến attacker
+
+Prevention:
+  - Validate email format (RFC 5322 regex)
+  - REJECT input chứa \r hoặc \n trong bất kỳ email header field
+  - Dùng email library thay vì string concatenation
+  - Python: email.utils.formataddr() thay vì f-string
+```
+
 ---
 
 ## Chương 19: Prototype Pollution
