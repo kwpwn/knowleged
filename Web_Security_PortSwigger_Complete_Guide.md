@@ -81,6 +81,7 @@
 - [Chương 45: Modern Browser Security — COOP, COEP, CORP](#chương-45-modern-browser-security--coop-coep-corp)
 - [Chương 46: Supply Chain Security & CI/CD Attacks](#chương-46-supply-chain-security--cicd-attacks)
 - [Chương 47: Tool Arsenal](#chương-47-tool-arsenal--công-cụ-pentester-thực-tế)
+- [Chương 48: Mobile App Security](#chương-48-mobile-app-security--khi-web-gặp-mobile)
 - [H. Bảng Tham Chiếu CVE Quan Trọng](#h-bảng-tham-chiếu-cve-quan-trọng)
 - [I. OWASP API Security Top 10 (2023)](#i-owasp-api-security-top-10-2023--quick-reference)
 
