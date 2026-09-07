@@ -22234,8 +22234,9 @@ Client Query
        │
        ▼
 ┌─────────────┐
-│ Execution   │ ← Call resolver functions
-│             │    for each field
+│ Execution   │ ← Call resolver functions for each field
+│             │    (resolver = hàm xử lý cho MỖI field,
+│             │     lấy data từ DB/API/file tương ứng)
 └──────┬──────┘
        │
        ▼
@@ -22469,6 +22470,8 @@ mutation {
 
 **Fragment-based DoS:**
 
+Fragment là cách tái sử dụng một nhóm fields trong GraphQL query — giống biến trong code. Ví dụ: `fragment UserInfo on User { name email }` rồi dùng `...UserInfo` ở nhiều chỗ.
+
 ```graphql
 # Circular fragment references (pre-validation DoS)
 fragment A on User { ...B }
@@ -22651,7 +22654,9 @@ PATCH /api/users/1  → Partial update?
 OPTIONS /api/users  → Shows allowed methods!
 ```
 
-#### 33.1.2 Mass Assignment
+#### 33.1.2 Mass Assignment (Gán Hàng Loạt)
+
+Mass Assignment xảy ra khi server tự động copy TẤT CẢ trường dữ liệu từ request vào object/record trong database, kể cả các trường mà user KHÔNG được phép thay đổi (ví dụ: `role`, `isAdmin`, `balance`).
 
 ```http
 # Normal registration request:
@@ -24359,7 +24364,7 @@ Khi đã tìm được lỗ hổng, bạn cần:
 ```
 Lỗ hổng                    | Impact thấp          | Impact cao
 ──────────────────────────────────────────────────────────────────
-Self-XSS                   | Chỉ ảnh hưởng bạn    | Chain với CSRF → ATO
+Self-XSS                   | Chỉ ảnh hưởng bạn    | Chain với CSRF → ATO (Account Takeover)
 Blind SQLi                 | Chỉ trả về true/false| Extract toàn bộ database
 SSRF to localhost           | Bị block bởi filter  | Đọc được AWS credentials
 Open redirect              | Chỉ redirect         | Steal OAuth token
@@ -25701,7 +25706,8 @@ Phòng chống:
 - Verify digital signature cho updates
 - Integrity check cho CI/CD pipeline
 - Không deserialize untrusted data
-- SRI (Subresource Integrity) cho CDN resources
+- SRI (Subresource Integrity) cho CDN resources — browser so sánh hash của file
+  tải về với hash trong attribute `integrity`, nếu khác → không load file
 ```
 
 **A09: Security Logging and Monitoring Failures**
@@ -25983,7 +25989,7 @@ server {
 ┌──────────────────────────────────────────────────────────────────┐
 │ 1. REQUIREMENTS & DESIGN                                         │
 │    ├── Security requirements cùng cấp bậc với functional req     │
-│    ├── Threat modeling (STRIDE, DREAD)                            │
+│    ├── Threat modeling (STRIDE, DREAD — xem giải thích bên dưới)  │
 │    └── Abuse case / misuse case                                  │
 ├──────────────────────────────────────────────────────────────────┤
 │ 2. DEVELOPMENT                                                   │
@@ -26016,6 +26022,28 @@ server {
 │    ├── Bug bounty program                                        │
 │    └── Regular penetration testing (ít nhất 1 lần/năm)           │
 └──────────────────────────────────────────────────────────────────┘
+```
+
+**Threat Modeling — STRIDE & DREAD:**
+
+```
+STRIDE — phân loại 6 loại mối đe dọa:
+  S — Spoofing (giả mạo danh tính): attacker giả vờ là user khác
+  T — Tampering (sửa đổi dữ liệu): sửa data trong transit hoặc at rest
+  R — Repudiation (chối bỏ): user thực hiện hành động rồi phủ nhận
+  I — Information Disclosure (lộ thông tin): data bị lộ ra ngoài
+  D — Denial of Service: làm service không khả dụng
+  E — Elevation of Privilege (leo quyền): user thường → admin
+
+DREAD — chấm điểm mức độ nguy hiểm của mỗi mối đe dọa (1-10):
+  D — Damage (thiệt hại): mức độ nghiêm trọng nếu bị khai thác?
+  R — Reproducibility (tái tạo): dễ dàng lặp lại attack?
+  E — Exploitability (khả năng khai thác): cần kỹ năng cao không?
+  A — Affected Users (ảnh hưởng): bao nhiêu user bị ảnh hưởng?
+  D — Discoverability (khả năng phát hiện): attacker dễ tìm ra?
+
+Cách dùng: Liệt kê tất cả features → áp STRIDE cho mỗi feature →
+  chấm DREAD cho mỗi threat → ưu tiên fix threats điểm cao nhất.
 ```
 
 **Bug Bounty Program Setup:**
@@ -26423,7 +26451,9 @@ Việt Nam:
 
 ## Phụ lục A: SQL Injection Cheat Sheet
 
-Bảng tổng hợp cú pháp SQL cho 5 hệ quản trị CSDL phổ biến nhất:
+Bảng tổng hợp cú pháp SQL cho 5 hệ quản trị CSDL phổ biến nhất.
+
+> **Bước đầu tiên: Xác định loại database.** Dấu hiệu nhận biết: error message chứa "MySQL", "ORA-" (Oracle), "Microsoft SQL Server", "PostgreSQL"; hoặc thử từng syntax đặc trưng: `@@version` (MySQL/MSSQL), `version()` (PostgreSQL), `banner FROM v$version` (Oracle). Cái nào trả kết quả → đó là DB đang dùng.
 
 ### A.1 MySQL
 
